@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowDownToLine, Check, ChevronDown, ImagePlus, Magnet, Paintbrush, Palette, Pencil, Plus, RotateCcw, Upload, Wand2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDownToLine, Check, ChevronDown, ImagePlus, Magnet, Paintbrush, Palette, Pencil, Plus, Redo2, RotateCcw, Undo2, Upload, Wand2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { colors } from './colors';
 
 type Point = { x: number; y: number; inHandle?: Point; outHandle?: Point };
@@ -171,6 +171,8 @@ function makePaintLayer(image: HTMLImageElement, selection: Selection) {
 function App() {
   const [image, setImage] = useState<string | null>(null);
   const [selections, setSelections] = useState<Selection[]>([]);
+  const selectionsRef = useRef(selections);
+  const selectionHistory = useRef<{past:Selection[][];future:Selection[][]}>({past:[],future:[]});
   const [points, setPoints] = useState<Point[]>([]);
   const [curveDrag, setCurveDrag] = useState<CurveDrag|null>(null);
   const [maskShape, setMaskShape] = useState<MaskShape|null>(null);
@@ -207,10 +209,13 @@ function App() {
   const paintCache = useRef(new Map<number, { key: string; canvas: HTMLCanvasElement; left: number; top: number }>());
   const fileRef = useRef<HTMLInputElement>(null);
   const selected = selections.find(item => item.id === selectedId);
+  const updateSelections=(update:(current:Selection[])=>Selection[],record=true)=>{const previous=selectionsRef.current,next=update(previous);if(next===previous)return;if(record){selectionHistory.current.past.push(previous);if(selectionHistory.current.past.length>60)selectionHistory.current.past.shift();}selectionHistory.current.future=[];selectionsRef.current=next;setSelections(next);};
+  const undoSurfaces=()=>{const history=selectionHistory.current;if(!history.past.length)return;const previous=history.past.pop()!;history.future.push(selectionsRef.current);selectionsRef.current=previous;setSelections(previous);setSelectedId(id=>id!==null&&previous.some(s=>s.id===id)?id:previous[previous.length-1]?.id??null);setMultiSelectedIds([]);};
+  const redoSurfaces=()=>{const history=selectionHistory.current;if(!history.future.length)return;const next=history.future.pop()!;history.past.push(selectionsRef.current);selectionsRef.current=next;setSelections(next);setSelectedId(id=>id!==null&&next.some(s=>s.id===id)?id:next[next.length-1]?.id??null);setMultiSelectedIds([]);};
   const palette = (colors as Color[]).filter(c => (family==='All colors'||colorFamily(c)===family) && `${c.colorName} ${c.colorCode} ${c.colorTone}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(()=>setVisibleCount(64),[family,query]);
   useEffect(()=>{
-    const down=(event:KeyboardEvent)=>{if(event.code==='Space'&&!['INPUT','TEXTAREA','SELECT'].includes((event.target as HTMLElement)?.tagName)){event.preventDefault();spaceHeldRef.current=true;}};
+    const down=(event:KeyboardEvent)=>{const target=event.target as HTMLElement,typing=['INPUT','TEXTAREA','SELECT'].includes(target?.tagName)||target?.isContentEditable;if((event.ctrlKey||event.metaKey)&&!typing){if(event.key.toLowerCase()==='z'){event.preventDefault();if(event.shiftKey)redoSurfaces();else undoSurfaces();return;}if(event.key.toLowerCase()==='y'){event.preventDefault();redoSurfaces();return;}}if(event.code==='Space'&&!typing){event.preventDefault();spaceHeldRef.current=true;}};
     const up=(event:KeyboardEvent)=>{if(event.code==='Space')spaceHeldRef.current=false;};
     const blur=()=>{spaceHeldRef.current=false;};
     window.addEventListener('keydown',down);window.addEventListener('keyup',up);window.addEventListener('blur',blur);
@@ -261,7 +266,7 @@ function App() {
     const url = URL.createObjectURL(file); const img = new Image();
     img.onload = () => { const canvas = canvasRef.current; if (canvas) { canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; }
       paintCache.current.clear(); edgeMapRef.current = makeEdgeMap(img); colorMapRef.current=makeColorMap(img); setZoom(1); setPan({ x: 0, y: 0 });
-      imageRef.current = img; setImage(url); setSelections([]); setPoints([]); setMaskShape(null); setColorSeed(null); setSelectedId(null); setMultiSelectedIds([]); setDrawing(false); setToast('Photo added — trace an area or use color select.'); };
+      imageRef.current = img; setImage(url); selectionsRef.current=[];selectionHistory.current={past:[],future:[]};setSelections([]); setPoints([]); setMaskShape(null); setColorSeed(null); setSelectedId(null); setMultiSelectedIds([]); setDrawing(false); setToast('Photo added — trace an area or use color select.'); };
     img.onerror = () => setToast('This photo could not be opened. Try another file.'); img.src = url;
   };
   const pointFromEvent = (e: PointerEvent<HTMLCanvasElement>) => { const c = canvasRef.current!; const r = c.getBoundingClientRect(); return { x: (e.clientX-r.left)*c.width/r.width, y: (e.clientY-r.top)*c.height/r.height }; };
@@ -304,26 +309,26 @@ function App() {
   const canFinish = tool==='wand' ? maskShape!==null : points.length>=minimumPoints;
   const isMaskTrace=maskEditMode==='trace-add'||maskEditMode==='trace-erase';
   const makeCurrentShape = (): SurfacePart => tool==='wand' && maskShape ? maskShape : ({ path: makePath(points), points, tool });
-  const saveArea = () => { if(renaming && selectedId!==null){setSelections(v=>v.map(s=>s.id===selectedId?{...s,name:name.trim()||s.name}:s));setRenaming(false);setNaming(false);setName('');setToast('Surface renamed.');return;} if (tool!=='wand' && points.length < minimumPoints || tool==='wand' && !maskShape) return; const shape=makeCurrentShape(); setSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, shapes:[shape], holes:[], color: null, opacity: 1 }]); setPoints([]); setMaskShape(null);setColorSeed(null); setName(''); setNaming(false); setDrawing(false); setAreaMode('new'); setToast('Surface saved. Pick a paint color to preview it.'); };
+  const saveArea = () => { if(renaming && selectedId!==null){updateSelections(v=>v.map(s=>s.id===selectedId?{...s,name:name.trim()||s.name}:s));setRenaming(false);setNaming(false);setName('');setToast('Surface renamed.');return;} if (tool!=='wand' && points.length < minimumPoints || tool==='wand' && !maskShape) return; const shape=makeCurrentShape(); updateSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, shapes:[shape], holes:[], color: null, opacity: 1 }]); setPoints([]); setMaskShape(null);setColorSeed(null); setName(''); setNaming(false); setDrawing(false); setAreaMode('new'); setToast('Surface saved. Pick a paint color to preview it.'); };
   const startDrawing = (mode: 'new'|'add'|'subtract') => { setDrawing(true); setAreaMode(mode); setTool('polygon'); setEdgeSnap(false); setGesture(false); setPoints([]);setMaskShape(null);setColorSeed(null);setMaskEditMode('select'); if (mode==='new') {setSelectedId(null);setMultiSelectedIds([]);} };
   const canEditSurface=!!selected&&selected.shapes.length===1&&selected.holes.length===0&&!('maskCanvas' in selected.shapes[0]);
   const editSurface=()=>{const shape=selected?.shapes[0];if(!selected||!shape||selected.shapes.length!==1||selected.holes.length||'maskCanvas' in shape)return;setDrawing(true);setAreaMode('edit');setTool('polygon');setEdgeSnap(false);setGesture(false);setCurveDrag(null);setPoints(shape.points);setMaskShape(null);setColorSeed(null);setMaskEditMode('select');setNaming(false);setToast('Edit the outline, then save it to update this surface.');};
   const finishDrawing = () => {
     if (!canFinish) return;
-    if(areaMode==='edit'&&selectedId!==null){const shape=makeCurrentShape();setSelections(v=>v.map(s=>s.id===selectedId?{...s,shapes:[shape]}:s));paintCache.current.delete(selectedId);setPoints([]);setDrawing(false);setAreaMode('new');setToast('Surface outline updated.');return;}
+    if(areaMode==='edit'&&selectedId!==null){const shape=makeCurrentShape();updateSelections(v=>v.map(s=>s.id===selectedId?{...s,shapes:[shape]}:s));paintCache.current.delete(selectedId);setPoints([]);setDrawing(false);setAreaMode('new');setToast('Surface outline updated.');return;}
     if (areaMode === 'new') { setNaming(true); return; }
     if (selectedId === null) return;
     const shape=makeCurrentShape();
-    setSelections(v=>v.map(s=>s.id!==selectedId?s:areaMode==='add'?{...s,shapes:[...s.shapes,shape]}:{...s,holes:[...s.holes,shape]}));
+    updateSelections(v=>v.map(s=>s.id!==selectedId?s:areaMode==='add'?{...s,shapes:[...s.shapes,shape]}:{...s,holes:[...s.holes,shape]}));
     paintCache.current.delete(selectedId); setPoints([]);setMaskShape(null); setDrawing(false); setAreaMode('new'); setToast(areaMode==='add'?'Area added to the paint mask.':'Object cut out of the paint mask.');
   };
   const finishMaskTrace = () => {if(!maskShape||points.length<3||!imageRef.current)return;const mode=maskEditMode==='trace-erase'?'erase':'add';const next=editMaskWithPath(maskShape,makePath(points),points,mode,imageRef.current.naturalWidth,imageRef.current.naturalHeight);setMaskShape(next);setPoints([]);setCurveDrag(null);setColorSeed(null);setTool('wand');setMaskEditMode('select');setToast(mode==='add'?'Traced region added to the color selection.':next?'Traced region removed from the color selection.':'Color selection cleared.');};
-  const apply = () => { if (!selected) return; setSelections(v => v.map(s => s.id === selected.id ? { ...s, color: color.colorValue, colorName: color.colorName, colorCode: color.colorCode } : s)); setToast(`${color.colorName} applied to ${selected.name}.`); };
-  const setOpacity = (opacity: number) => { if (selected) setSelections(v => v.map(s => s.id === selected.id ? { ...s, opacity } : s)); };
-  const remove = () => { setSelections(v => v.filter(s => s.id !== selectedId)); if(selectedId!==null)paintCache.current.delete(selectedId); setSelectedId(null); };
-  const clearPaint = () => { if(!selected)return;setSelections(v=>v.map(s=>s.id===selected.id?{...s,color:null,colorName:undefined,colorCode:undefined}:s));paintCache.current.delete(selected.id);setToast('Paint removed from this surface.'); };
-  const mergeSelected = () => { const ids=new Set([...(selectedId===null?[]:[selectedId]),...multiSelectedIds]);if(ids.size<2)return;const parts=selections.filter(s=>ids.has(s.id));const active=parts.find(s=>s.id===selectedId)??parts[0];const merged:Selection={id:Date.now(),name:parts.map(s=>s.name).join(' + '),shapes:parts.flatMap(s=>s.shapes),holes:parts.flatMap(s=>s.holes),color:active.color,colorName:active.colorName,colorCode:active.colorCode,opacity:active.opacity,mergedFrom:parts};setSelections(v=>[...v.filter(s=>!ids.has(s.id)),merged]);parts.forEach(s=>paintCache.current.delete(s.id));setSelectedId(merged.id);setMultiSelectedIds([]);setToast(`${parts.length} surfaces merged. You can split them again.`);};
-  const splitSelected = () => {if(!selected?.mergedFrom)return;const originals=selected.mergedFrom;setSelections(v=>[...v.filter(s=>s.id!==selected.id),...originals]);paintCache.current.delete(selected.id);setSelectedId(originals[0]?.id??null);setMultiSelectedIds([]);setToast('Merged surfaces split back into their original areas.');};
+  const apply = () => { if (!selected) return; updateSelections(v => v.map(s => s.id === selected.id ? { ...s, color: color.colorValue, colorName: color.colorName, colorCode: color.colorCode } : s)); setToast(`${color.colorName} applied to ${selected.name}.`); };
+  const setOpacity = (opacity: number) => { if (selected) updateSelections(v => v.map(s => s.id === selected.id ? { ...s, opacity } : s),false); };
+  const remove = () => { updateSelections(v => v.filter(s => s.id !== selectedId)); if(selectedId!==null)paintCache.current.delete(selectedId); setSelectedId(null); };
+  const clearPaint = () => { if(!selected)return;updateSelections(v=>v.map(s=>s.id===selected.id?{...s,color:null,colorName:undefined,colorCode:undefined}:s));paintCache.current.delete(selected.id);setToast('Paint removed from this surface.'); };
+  const mergeSelected = () => { const ids=new Set([...(selectedId===null?[]:[selectedId]),...multiSelectedIds]);if(ids.size<2)return;const parts=selections.filter(s=>ids.has(s.id));const active=parts.find(s=>s.id===selectedId)??parts[0];const merged:Selection={id:Date.now(),name:parts.map(s=>s.name).join(' + '),shapes:parts.flatMap(s=>s.shapes),holes:parts.flatMap(s=>s.holes),color:active.color,colorName:active.colorName,colorCode:active.colorCode,opacity:active.opacity,mergedFrom:parts};updateSelections(v=>[...v.filter(s=>!ids.has(s.id)),merged]);parts.forEach(s=>paintCache.current.delete(s.id));setSelectedId(merged.id);setMultiSelectedIds([]);setToast(`${parts.length} surfaces merged. You can split them again.`);};
+  const splitSelected = () => {if(!selected?.mergedFrom)return;const originals=selected.mergedFrom;updateSelections(v=>[...v.filter(s=>s.id!==selected.id),...originals]);paintCache.current.delete(selected.id);setSelectedId(originals[0]?.id??null);setMultiSelectedIds([]);setToast('Merged surfaces split back into their original areas.');};
   const exportImage = () => { const c = canvasRef.current; if (!c || !image) return; const out = document.createElement('canvas'); out.width = c.width; out.height = c.height; const ctx = out.getContext('2d'); if (!ctx) return; draw(ctx, false, []); const jpg=exportFormat==='jpg'; const a = document.createElement('a'); a.download = `room-preview.${exportFormat}`; a.href = out.toDataURL(jpg?'image/jpeg':'image/png', jpg?0.92:undefined); a.click(); setToast(`Your ${jpg?'JPG':'PNG'} preview is ready to share.`); };
 
   return <div className="app-shell" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); upload(e.dataTransfer.files[0]); }}>
@@ -338,7 +343,7 @@ function App() {
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={e => upload(e.target.files?.[0])}/>
       </section>
       <aside className="side-panel"><div className="panel-heading"><div><span className="panel-kicker">YOUR PROJECT</span><h2>Color your space</h2></div><span className="count-pill">{selections.length} {selections.length === 1 ? 'area' : 'areas'}</span></div>
-        <div className="area-section"><div className="section-label">SURFACES <span>{selections.length ? `${selections.length} saved` : 'Optional'}</span></div>
+        <div className="area-section"><div className="section-label"><span>SURFACES <small>{selections.length ? `${selections.length} saved` : 'Optional'}</small></span><div className="history-controls"><button aria-label="Undo surface change" title="Undo (Ctrl+Z)" disabled={!selectionHistory.current.past.length} onClick={undoSurfaces}><Undo2 size={14}/></button><button aria-label="Redo surface change" title="Redo (Ctrl+Y)" disabled={!selectionHistory.current.future.length} onClick={redoSurfaces}><Redo2 size={14}/></button></div></div>
           {selections.length === 0 ? <div className="empty-areas"><div className="empty-area-icon"><Plus size={17}/></div><div><b>No surfaces yet</b><p>{image ? 'Create a surface or select a color region.' : 'Upload a photo, then create a surface.'}</p></div></div> : <details className="surface-dropdown"><summary><span className="surface-current"><b>{selected?.name??'Choose a surface'}</b><small>{selected?.colorName??'Select an area to edit or paint'}</small></span><ChevronDown size={15}/></summary><div className="area-list">{selections.map(s => <button key={s.id} className={`area-row ${selectedId===s.id||multiSelectedIds.includes(s.id)?'active':''}`} onClick={e=>{if(e.shiftKey){setMultiSelectedIds(v=>v.includes(s.id)?v.filter(id=>id!==s.id):[...v,s.id]);}else{setSelectedId(s.id);setMultiSelectedIds([]);e.currentTarget.closest('details')?.removeAttribute('open');}}}><span className="area-swatch" style={{background:s.color || '#eee8e2'}}/><span className="area-text"><b>{s.name}</b><small>{s.colorName || 'No paint applied'}</small></span><span className="area-arrow">{multiSelectedIds.includes(s.id)?'Grouped':selectedId===s.id?'Selected':'›'}</span></button>)}</div></details>}
           {selections.length>1&&!drawing&&<p className="surface-help">Shift-click areas to select multiple for merging.</p>}
           {selected && !drawing && <div className="surface-actions"><button onClick={editSurface} disabled={!canEditSurface} title={canEditSurface?'Edit this surface outline':'Editing is available for single traced surfaces without cutouts'}>Edit surface</button><button onClick={()=>{setName(selected.name);setRenaming(true);setNaming(true);}}>Rename surface</button><button className="remove-surface" onClick={remove}>Remove surface</button>{selected.mergedFrom&&<button onClick={splitSelected}>Split merged area</button>}{new Set([selectedId,...multiSelectedIds]).size>1&&<button onClick={mergeSelected}>Merge selected</button>}</div>}
