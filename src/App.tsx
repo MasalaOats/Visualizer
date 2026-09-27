@@ -89,7 +89,7 @@ function containsPart(ctx: CanvasRenderingContext2D, shape: SurfacePart, point: 
   return !!shape.maskCanvas.getContext('2d')?.getImageData(x,y,1,1).data[3];
 }
 
-function makePath(tool: Tool, points: Point[]) {
+function makePath(points: Point[]) {
   const path = new Path2D();
   if (points.length) {
     path.moveTo(points[0].x,points[0].y);
@@ -126,18 +126,12 @@ function makePaintLayer(image: HTMLImageElement, selection: Selection) {
   const maskPixels = maskCtx.getImageData(0, 0, width, height).data;
   const rgb = selection.color?.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number) ?? [128,128,128];
   const output = new Uint8ClampedArray(pixels.data.length);
-  let lightTotal=0, coveredPixels=0;
-  for (let i=0;i<pixels.data.length;i+=4) if (maskPixels[i+3]) {
-    lightTotal += ((0.2126*pixels.data[i]+0.7152*pixels.data[i+1]+0.0722*pixels.data[i+2])/255) * maskPixels[i+3];
-    coveredPixels += maskPixels[i+3];
-  }
-  const averageLight = coveredPixels ? lightTotal/coveredPixels : 0.5;
   for (let i = 0; i < pixels.data.length; i += 4) {
     const coverage = maskPixels[i+3] / 255 * selection.opacity;
     if (!coverage) continue;
     const light = (0.2126*pixels.data[i] + 0.7152*pixels.data[i+1] + 0.0722*pixels.data[i+2]) / 255;
-    // Retain only luminance-based light and shadow, never the old surface color.
-    const shade = Math.max(0.68, Math.min(1.28, 1 + (light-averageLight)*0.95));
+    // Keep the new paint opaque: only 4% of the original luminance remains as subtle surface lighting.
+    const shade = 0.96 + light * 0.04;
     output[i] = Math.min(255, rgb[0]*shade);
     output[i+1] = Math.min(255, rgb[1]*shade);
     output[i+2] = Math.min(255, rgb[2]*shade);
@@ -214,9 +208,9 @@ function App() {
     if (outlines && preview.length) {
       ctx.save(); ctx.strokeStyle = areaMode === 'subtract' ? '#e05b50' : '#b8754e'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
       if (tool === 'polygon' || tool === 'freehand') {
-        ctx.stroke(makePath(tool,preview)); ctx.setLineDash([]);
+        ctx.stroke(makePath(preview)); ctx.setLineDash([]);
         if (tool === 'polygon') preview.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#b8754e'; ctx.stroke(); });
-      } else if (preview.length > 1) ctx.stroke(makePath(tool, preview));
+      } else if (preview.length > 1) ctx.stroke(makePath(preview));
       ctx.restore();
     }
   }, [areaMode, maskShape, points, selectedId, selections, tool]);
@@ -266,7 +260,7 @@ function App() {
   const changeZoom = (next: number) => { const value = Math.max(1, Math.min(4, next)); setZoom(value); if (value === 1) setPan({ x: 0, y: 0 }); };
   const minimumPoints = tool === 'wand' ? 0 : 3;
   const canFinish = tool==='wand' ? maskShape!==null : points.length>=minimumPoints;
-  const makeCurrentShape = (): SurfacePart => tool==='wand' && maskShape ? maskShape : ({ path: makePath(tool, points), points, tool });
+  const makeCurrentShape = (): SurfacePart => tool==='wand' && maskShape ? maskShape : ({ path: makePath(points), points, tool });
   const saveArea = () => { if(renaming && selectedId!==null){setSelections(v=>v.map(s=>s.id===selectedId?{...s,name:name.trim()||s.name}:s));setRenaming(false);setNaming(false);setName('');setToast('Surface renamed.');return;} if (tool!=='wand' && points.length < minimumPoints || tool==='wand' && !maskShape) return; const shape=makeCurrentShape(); setSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, shapes:[shape], holes:[], color: null, opacity: 1 }]); setPoints([]); setMaskShape(null);setColorSeed(null); setName(''); setNaming(false); setDrawing(false); setAreaMode('new'); setToast('Surface saved. Pick a paint color to preview it.'); };
   const startDrawing = (mode: 'new'|'add'|'subtract') => { setDrawing(true); setAreaMode(mode); setTool('polygon'); setEdgeSnap(false); setGesture(false); setPoints([]);setMaskShape(null);setColorSeed(null);setMaskEditMode('select'); if (mode==='new') {setSelectedId(null);setMultiSelectedIds([]);} };
   const finishDrawing = () => {
