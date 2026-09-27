@@ -20,10 +20,40 @@ function makePath(tool: Tool, points: Point[]) {
   return path;
 }
 
-function paintLuminance(value: string) {
-  const rgb = value.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number);
-  if (!rgb || rgb.length < 3) return 0.5;
-  return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+function makePaintLayer(image: HTMLImageElement, selection: Selection) {
+  const points = selection.points;
+  const left = Math.max(0, Math.floor(Math.min(...points.map(p => p.x))));
+  const top = Math.max(0, Math.floor(Math.min(...points.map(p => p.y))));
+  const right = Math.min(image.naturalWidth, Math.ceil(Math.max(...points.map(p => p.x))));
+  const bottom = Math.min(image.naturalHeight, Math.ceil(Math.max(...points.map(p => p.y))));
+  const width = Math.max(1, right-left), height = Math.max(1, bottom-top);
+  const source = document.createElement('canvas'); source.width = width; source.height = height;
+  const sourceCtx = source.getContext('2d', { willReadFrequently: true });
+  if (!sourceCtx) return { canvas: source, left, top };
+  sourceCtx.drawImage(image, left, top, width, height, 0, 0, width, height);
+  const pixels = sourceCtx.getImageData(0, 0, width, height);
+  const mask = document.createElement('canvas'); mask.width = width; mask.height = height;
+  const maskCtx = mask.getContext('2d');
+  if (!maskCtx) return { canvas: source, left, top };
+  maskCtx.translate(-left, -top); maskCtx.fillStyle = '#fff'; maskCtx.fill(selection.path);
+  const maskPixels = maskCtx.getImageData(0, 0, width, height).data;
+  const rgb = selection.color?.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number) ?? [128,128,128];
+  const output = new Uint8ClampedArray(pixels.data.length);
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    const coverage = maskPixels[i+3] / 255 * selection.opacity;
+    if (!coverage) continue;
+    const light = (0.2126*pixels.data[i] + 0.7152*pixels.data[i+1] + 0.0722*pixels.data[i+2]) / 255;
+    // Recolor the material itself, then use its original luminance as soft lighting and texture.
+    const shade = 0.62 + light * 0.48;
+    output[i] = Math.min(255, rgb[0]*shade + light*12);
+    output[i+1] = Math.min(255, rgb[1]*shade + light*12);
+    output[i+2] = Math.min(255, rgb[2]*shade + light*12);
+    output[i+3] = coverage * 255;
+  }
+  const layer = document.createElement('canvas'); layer.width = width; layer.height = height;
+  const layerCtx = layer.getContext('2d');
+  if (layerCtx) layerCtx.putImageData(new ImageData(output, width, height), 0, 0);
+  return { canvas: layer, left, top };
 }
 
 function App() {
@@ -41,6 +71,7 @@ function App() {
   const [toast, setToast] = useState('');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const paintCache = useRef(new Map<number, { key: string; canvas: HTMLCanvasElement; left: number; top: number }>());
   const fileRef = useRef<HTMLInputElement>(null);
   const selected = selections.find(item => item.id === selectedId);
   const palette = (colors as Color[]).filter(c => `${c.colorName} ${c.colorCode} ${c.colorTone}`.toLowerCase().includes(query.toLowerCase()));
@@ -51,14 +82,11 @@ function App() {
     if (imageRef.current) ctx.drawImage(imageRef.current, 0, 0, canvas.width, canvas.height);
     selections.forEach(s => {
       ctx.save();
-      if (s.color) {
-        ctx.clip(s.path);
-        // Color keeps the photo's texture; screen/multiply moves its base brightness toward the chosen paint.
-        ctx.globalCompositeOperation = 'color'; ctx.globalAlpha = s.opacity; ctx.fillStyle = s.color; ctx.fillRect(0,0,canvas.width,canvas.height);
-        const luminance = paintLuminance(s.color);
-        ctx.globalCompositeOperation = luminance >= 0.5 ? 'screen' : 'multiply';
-        ctx.globalAlpha = s.opacity * Math.min(0.58, Math.abs(luminance - 0.5) * 1.35);
-        ctx.fillStyle = s.color; ctx.fillRect(0,0,canvas.width,canvas.height);
+      if (s.color && imageRef.current) {
+        const key = `${s.color}:${s.opacity}:${s.points.map(p=>`${p.x},${p.y}`).join(';')}`;
+        let layer = paintCache.current.get(s.id);
+        if (!layer || layer.key !== key) { const result = makePaintLayer(imageRef.current, s); layer = { ...result, key }; paintCache.current.set(s.id, layer); }
+        ctx.drawImage(layer.canvas, layer.left, layer.top);
       }
       if (outlines) { ctx.strokeStyle = s.id === selectedId ? '#b8754e' : 'rgba(255,255,255,.95)'; ctx.lineWidth = s.id === selectedId ? 3 : 2; ctx.setLineDash(s.id === selectedId ? [] : [7, 5]); ctx.stroke(s.path); }
       ctx.restore();
@@ -81,6 +109,7 @@ function App() {
     if (!file.type.startsWith('image/')) { setToast('Choose an image file to get started.'); return; }
     const url = URL.createObjectURL(file); const img = new Image();
     img.onload = () => { const canvas = canvasRef.current; if (canvas) { canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; }
+      paintCache.current.clear();
       imageRef.current = img; setImage(url); setSelections([]); setPoints([]); setSelectedId(null); setDrawing(false); setToast('Photo added — outline an area to begin.'); };
     img.onerror = () => setToast('This photo could not be opened. Try another file.'); img.src = url;
   };
@@ -97,7 +126,7 @@ function App() {
   };
   const handlePointerUp = () => setGesture(false);
   const minimumPoints = tool === 'polygon' || tool === 'freehand' ? 3 : 2;
-  const saveArea = () => { if (points.length < minimumPoints) return; const path = makePath(tool, points); setSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, path, points, tool, color: null, opacity: 0.86 }]); setPoints([]); setName(''); setNaming(false); setDrawing(false); setToast('Surface saved. Pick a paint color to preview it.'); };
+  const saveArea = () => { if (points.length < minimumPoints) return; const path = makePath(tool, points); setSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, path, points, tool, color: null, opacity: 1 }]); setPoints([]); setName(''); setNaming(false); setDrawing(false); setToast('Surface saved. Pick a paint color to preview it.'); };
   const apply = () => { if (!selected) return; setSelections(v => v.map(s => s.id === selected.id ? { ...s, color: color.colorValue, colorName: color.colorName, colorCode: color.colorCode } : s)); setToast(`${color.colorName} applied to ${selected.name}.`); };
   const setOpacity = (opacity: number) => { if (selected) setSelections(v => v.map(s => s.id === selected.id ? { ...s, opacity } : s)); };
   const remove = () => { setSelections(v => v.filter(s => s.id !== selectedId)); setSelectedId(null); };
@@ -127,7 +156,7 @@ function App() {
           </div><p className="drawing-tip">{tool==='polygon'?'Click around the edge; click Finish when the outline is closed.':tool==='freehand'?'Press and drag around the surface edge, then release.':'Click and drag to fit the shape to the surface.'}</p></>}
         </div>
         <div className="palette-section"><div className="section-label">COLOR PALETTE <span>{palette.length} colors</span></div><div className="selected-color"><span className="selected-dot" style={{background:color.colorValue}}/><div><b>{color.colorName}</b><small>{color.colorCode} · {color.colorTone}</small></div><span className="finish-tag">SAMPLE</span></div><label className="search-box"><Palette size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a color or finish"/><kbd>/</kbd></label><div className="swatch-grid">{palette.slice(0, 48).map(c => <button key={c.colorCode} title={`${c.colorName} · ${c.colorCode}`} aria-label={`Choose ${c.colorName}`} onClick={() => setColor(c)} className={`swatch ${color.colorCode===c.colorCode?'chosen':''}`} style={{background:c.colorValue}}>{color.colorCode===c.colorCode&&<Check size={13}/>}</button>)}</div><p className="palette-foot">Showing {Math.min(palette.length,48)} of {palette.length} colors</p>
-          {selected && <label className="opacity-control"><span>Paint strength <b>{Math.round(selected.opacity*100)}%</b></span><input aria-label="Paint strength" type="range" min="25" max="100" value={Math.round(selected.opacity*100)} onChange={e=>setOpacity(Number(e.target.value)/100)}/><small>Lower values blend more of the original surface through.</small></label>}
+          {selected && <label className="opacity-control"><span>Paint coverage <b>{Math.round(selected.opacity*100)}%</b></span><input aria-label="Paint coverage" type="range" min="25" max="100" value={Math.round(selected.opacity*100)} onChange={e=>setOpacity(Number(e.target.value)/100)}/><small>At 100%, paint covers the old color while keeping the photo’s lighting and texture.</small></label>}
           <button className="apply-button" disabled={!selected} onClick={apply}><Paintbrush size={16}/>{selected ? `Preview on ${selected.name}` : 'Select a surface to preview'}</button>{selected && <button className="delete-link" onClick={remove}><Trash2 size={13}/> Remove {selected.name}</button>}
         </div><div className="privacy-note"><span>✳</span><p>Your photo stays on this device. We never upload or store your images.</p></div>
       </aside>
