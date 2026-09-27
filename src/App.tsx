@@ -220,7 +220,7 @@ function App() {
     for (let y=Math.max(1,centerY-radius);y<=Math.min(map.height-2,centerY+radius);y++) for (let x=Math.max(1,centerX-radius);x<=Math.min(map.width-2,centerX+radius);x++) {
       const distance = Math.hypot(x-centerX,y-centerY), edge = map.data[y*map.width+x];
       const score = edge-distance*1.35;
-      if (distance<=radius && score>bestScore) { bestScore=score; best={x/scale,y/scale}; }
+      if (distance<=radius && score>bestScore) { bestScore=score; best={x:x/scale,y:y/scale}; }
     }
     return best;
   };
