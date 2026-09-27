@@ -43,11 +43,11 @@ function makePaintLayer(image: HTMLImageElement, selection: Selection) {
     const coverage = maskPixels[i+3] / 255 * selection.opacity;
     if (!coverage) continue;
     const light = (0.2126*pixels.data[i] + 0.7152*pixels.data[i+1] + 0.0722*pixels.data[i+2]) / 255;
-    // Recolor the material itself, then use its original luminance as soft lighting and texture.
-    const shade = 0.62 + light * 0.48;
-    output[i] = Math.min(255, rgb[0]*shade + light*12);
-    output[i+1] = Math.min(255, rgb[1]*shade + light*12);
-    output[i+2] = Math.min(255, rgb[2]*shade + light*12);
+    // Full coverage is opaque paint; retain only a very small amount of the original light variation.
+    const shade = 0.96 + light * 0.04;
+    output[i] = Math.min(255, rgb[0]*shade);
+    output[i+1] = Math.min(255, rgb[1]*shade);
+    output[i+2] = Math.min(255, rgb[2]*shade);
     output[i+3] = coverage * 255;
   }
   const layer = document.createElement('canvas'); layer.width = width; layer.height = height;
