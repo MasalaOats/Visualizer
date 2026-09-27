@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowDownToLine, Check, ChevronRight, ImagePlus, Paintbrush, Palette, Pencil, Plus, RotateCcw, Upload, Wand2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDownToLine, Check, ChevronRight, ImagePlus, Magnet, Paintbrush, Palette, Pencil, Plus, RotateCcw, Upload, Wand2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { colors } from './colors';
 
 type Point = { x: number; y: number };
@@ -40,13 +40,19 @@ function makeColorMap(image: HTMLImageElement): ColorMap {
   ctx.drawImage(image,0,0,width,height);return{data:ctx.getImageData(0,0,width,height).data,width,height,scale};
 }
 
-function makeColorMask(map: ColorMap, point: Point, tolerance: number): MaskShape | null {
+function makeColorMask(map: ColorMap, point: Point, tolerance: number, scope: 'connected' | 'image'): MaskShape | null {
   const sx=Math.max(0,Math.min(map.width-1,Math.floor(point.x*map.scale))),sy=Math.max(0,Math.min(map.height-1,Math.floor(point.y*map.scale))),seed=(sy*map.width+sx)*4;
   const r=map.data[seed],g=map.data[seed+1],b=map.data[seed+2],limit=tolerance*tolerance*3,total=map.width*map.height;
-  const seen=new Uint8Array(total),queue=new Int32Array(total);let read=0,write=0,minX=map.width,minY=map.height,maxX=0,maxY=0;
-  const add=(x:number,y:number)=>{if(x<0||y<0||x>=map.width||y>=map.height)return;const at=y*map.width+x;if(seen[at])return;seen[at]=1;const i=at*4,dr=map.data[i]-r,dg=map.data[i+1]-g,db=map.data[i+2]-b;if(dr*dr+dg*dg+db*db>limit)return;queue[write++]=at;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);};
-  add(sx,sy);
-  while(read<write){const index=queue[read++],x=index%map.width,y=Math.floor(index/map.width);add(x+1,y);add(x-1,y);add(x,y+1);add(x,y-1);}
+  const queue=new Int32Array(total);let read=0,write=0,minX=map.width,minY=map.height,maxX=-1,maxY=-1;
+  const matches=(at:number)=>{const i=at*4,dr=map.data[i]-r,dg=map.data[i+1]-g,db=map.data[i+2]-b;return dr*dr+dg*dg+db*db<=limit;};
+  const add=(x:number,y:number)=>{if(x<0||y<0||x>=map.width||y>=map.height)return;const at=y*map.width+x;if(!matches(at))return;queue[write++]=at;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);};
+  if(scope==='image') {
+    for(let at=0;at<total;at++) if(matches(at)) { queue[write++]=at;const x=at%map.width,y=Math.floor(at/map.width);minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y); }
+  } else {
+    const seen=new Uint8Array(total),stack=new Int32Array(total);let stackSize=0;stack[stackSize++]=sy*map.width+sx;seen[sy*map.width+sx]=1;
+    const visit=(next:number,x:number)=>{if(next<0||next>=total||seen[next]||Math.abs(next%map.width-x)>1)return;seen[next]=1;stack[stackSize++]=next;};
+    while(stackSize){const at=stack[--stackSize],x=at%map.width,y=Math.floor(at/map.width);if(!matches(at))continue;queue[write++]=at;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);visit(at-1,x);visit(at+1,x);visit(at-map.width,x);visit(at+map.width,x);}
+  }
   if(!write)return null;
   const canvas=document.createElement('canvas');canvas.width=maxX-minX+1;canvas.height=maxY-minY+1;
   const ctx=canvas.getContext('2d');if(!ctx)return null;const imageData=ctx.createImageData(canvas.width,canvas.height);
@@ -140,6 +146,7 @@ function App() {
   const [tool, setTool] = useState<Tool>('polygon');
   const [edgeSnap, setEdgeSnap] = useState(false);
   const [colorTolerance, setColorTolerance] = useState(34);
+  const [colorScope, setColorScope] = useState<'connected'|'image'>('connected');
   const [areaMode, setAreaMode] = useState<'new' | 'add' | 'subtract'>('new');
   const [gesture, setGesture] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -228,7 +235,7 @@ function App() {
     const p = pointFromEvent(e);
     if (!drawing && zoom > 1) { e.currentTarget.setPointerCapture(e.pointerId); setPanStart({ x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }); return; }
     if (!drawing) { const ctx = canvasRef.current?.getContext('2d'); if (ctx) { const hit = [...selections].reverse().find(s => s.shapes.some(shape=>containsPart(ctx,shape,p)) && !s.holes.some(shape=>containsPart(ctx,shape,p))); if (hit) setSelectedId(hit.id); } return; }
-    if (tool === 'wand') { const map=colorMapRef.current; if(!map){setToast('The photo is still being prepared.');return;} const found=makeColorMask(map,p,colorTolerance); if(!found){setToast('Could not find a matching color region here.');return;} setMaskShape(found);setPoints([]);return; }
+    if (tool === 'wand') { const map=colorMapRef.current; if(!map){setToast('The photo is still being prepared.');return;} const found=makeColorMask(map,p,colorTolerance,colorScope); if(!found){setToast('Could not find a matching color region here.');return;} setMaskShape(found);setPoints([]);return; }
     if (tool === 'polygon') { setPoints(v => [...v, snapToEdge(p)]); return; }
     e.currentTarget.setPointerCapture(e.pointerId); setGesture(true); setPoints([p]);
   };
@@ -279,7 +286,7 @@ function App() {
             <button className={tool==='polygon'?'active':''} onClick={()=>{setTool('polygon');setMaskShape(null);setGesture(false);setPoints([]);}}><Pencil size={15}/> Point trace</button>
             <button className={tool==='freehand'?'active':''} onClick={()=>{setTool('freehand');setMaskShape(null);setGesture(false);setPoints([]);}}><Pencil size={15}/> Freehand</button>
             <button className={tool==='wand'?'active':''} onClick={()=>{setTool('wand');setPoints([]);setMaskShape(null);setGesture(false);}}><Wand2 size={15}/> Select similar color</button>
-          </div>{tool==='polygon' && <button className={`edge-snap ${edgeSnap?'active':''}`} onClick={()=>setEdgeSnap(v=>!v)}><Magnet size={13}/>{edgeSnap?'Edge snap on':'Snap clicks to edges'}</button>}{tool==='wand'&&<label className="tolerance-control">Color tolerance <b>{colorTolerance}</b><input aria-label="Color tolerance" type="range" min="8" max="100" value={colorTolerance} onChange={e=>setColorTolerance(Number(e.target.value))}/></label>}<p className="drawing-tip">{areaMode==='subtract'?'Trace or select the window, furniture, or object to keep paint off it.':areaMode==='add'?'Add another patch to this paint mask.':tool==='polygon'?'Click around the edge. Add more points to follow curves; edge snap helps.':tool==='freehand'?'Press and drag along the edge.':maskShape?'Color region selected — click another region or finish.':'Click a color region; adjust tolerance to include more or less.'}</p></>}
+          </div>{tool==='polygon' && <button className={`edge-snap ${edgeSnap?'active':''}`} onClick={()=>setEdgeSnap(v=>!v)}><Magnet size={13}/>{edgeSnap?'Edge snap on':'Snap clicks to edges'}</button>}{tool==='wand'&&<><label className="tolerance-control">Color tolerance <b>{colorTolerance}</b><input aria-label="Color tolerance" type="range" min="8" max="100" value={colorTolerance} onChange={e=>setColorTolerance(Number(e.target.value))}/></label><label className="color-scope-control"><input type="checkbox" checked={colorScope==='image'} onChange={e=>setColorScope(e.target.checked?'image':'connected')}/><span><b>Match across whole image</b><small>Selects disconnected areas with similar color too.</small></span></label></>}<p className="drawing-tip">{areaMode==='subtract'?'Trace or select the window, furniture, or object to keep paint off it.':areaMode==='add'?'Add another patch to this paint mask.':tool==='polygon'?'Click around the edge. Add more points to follow curves; edge snap helps.':tool==='freehand'?'Press and drag along the edge.':maskShape?'Color region selected — click another region or finish.':colorScope==='image'?'Click a color to select every matching region in the photo.':'Click a color region; adjust tolerance to include more or less.'}</p></>}
         </div>
         <div className="palette-section"><div className="section-label">COLOR PALETTE <span>{palette.length.toLocaleString()} colors</span></div><div className="selected-color"><span className="selected-dot" style={{background:color.colorValue}}/><div><b>{color.colorName}</b><small>{color.colorCode} · {color.colorTone}</small></div><span className="finish-tag">SAMPLE</span></div><div className="palette-filters"><select aria-label="Color family" value={family} onChange={e=>setFamily(e.target.value)}>{['All colors','Whites','Neutrals','Blacks','Reds','Oranges','Yellows','Greens','Cyans','Blues','Purples','Pinks'].map(f=><option key={f}>{f}</option>)}</select><label className="search-box"><Palette size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a color or finish"/><kbd>/</kbd></label></div><div className="swatch-grid color-list" onScroll={e=>{const el=e.currentTarget;if(el.scrollTop+el.clientHeight>=el.scrollHeight-24)setVisibleCount(v=>Math.min(v+64,palette.length));}}>{palette.slice(0, visibleCount).map(c => <button key={c.colorCode} title={`${c.colorName} · ${c.colorCode}`} aria-label={`Choose ${c.colorName}`} onClick={() => setColor(c)} className={`color-list-item ${color.colorCode===c.colorCode?'chosen':''}`}><span className="color-chip" style={{background:c.colorValue}}/><span className="color-list-copy"><b>{c.colorName}</b><small>{c.colorCode}</small></span>{color.colorCode===c.colorCode&&<Check size={13}/>}</button>)}</div><p className="palette-foot">Showing {Math.min(palette.length,visibleCount).toLocaleString()} of {palette.length.toLocaleString()} · scroll for more</p>
           {selected && <label className="opacity-control"><span>Paint coverage <b>{Math.round(selected.opacity*100)}%</b></span><input aria-label="Paint coverage" type="range" min="25" max="100" value={Math.round(selected.opacity*100)} onChange={e=>setOpacity(Number(e.target.value)/100)}/><small>At 100%, paint covers the old color while keeping the photo’s lighting and texture.</small></label>}
