@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowDownToLine, Check, ChevronDown, ChevronRight, ImagePlus, Magnet, Paintbrush, Palette, Pencil, Plus, RotateCcw, Upload, Wand2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDownToLine, Check, ChevronDown, ImagePlus, Magnet, Paintbrush, Palette, Pencil, Plus, RotateCcw, Upload, Wand2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { colors } from './colors';
 
 type Point = { x: number; y: number; inHandle?: Point; outHandle?: Point };
 type CurveDrag = { index: number; start: Point; mode: 'new'|'move'|'in'|'out' };
 type Tool = 'polygon' | 'freehand' | 'wand';
+type MaskEditMode = 'select'|'add'|'erase'|'trace-add'|'trace-erase';
 type Shape = { path: Path2D; points: Point[]; tool: Tool };
 type MaskShape = Shape & { maskCanvas: HTMLCanvasElement; left: number; top: number; scale: number; maskId: number };
 type SurfacePart = Shape | MaskShape;
@@ -65,6 +66,8 @@ function makeColorMask(map: ColorMap, point: Point, tolerance: number, scope: 'c
 }
 
 function paintMaskBrush(shape:MaskShape,point:Point,mode:'add'|'erase',radius:number,imageWidth:number,imageHeight:number):MaskShape {
+  const currentRight=shape.left+shape.maskCanvas.width/shape.scale,currentBottom=shape.top+shape.maskCanvas.height/shape.scale;
+  if(point.x-radius>=shape.left&&point.y-radius>=shape.top&&point.x+radius<=currentRight&&point.y+radius<=currentBottom){const current=shape.maskCanvas.getContext('2d');if(current){current.globalCompositeOperation=mode==='erase'?'destination-out':'source-over';current.fillStyle='#fff';current.beginPath();current.arc((point.x-shape.left)*shape.scale,(point.y-shape.top)*shape.scale,radius*shape.scale,0,Math.PI*2);current.fill();current.globalCompositeOperation='source-over';return{...shape,maskId:Date.now()+Math.random()};}}
   const left=Math.max(0,Math.min(shape.left,point.x-radius)),top=Math.max(0,Math.min(shape.top,point.y-radius));
   const right=Math.min(imageWidth,Math.max(shape.left+shape.maskCanvas.width/shape.scale,point.x+radius)),bottom=Math.min(imageHeight,Math.max(shape.top+shape.maskCanvas.height/shape.scale,point.y+radius));
   const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.ceil((right-left)*shape.scale));canvas.height=Math.max(1,Math.ceil((bottom-top)*shape.scale));
@@ -72,6 +75,25 @@ function paintMaskBrush(shape:MaskShape,point:Point,mode:'add'|'erase',radius:nu
   ctx.drawImage(shape.maskCanvas,(shape.left-left)*shape.scale,(shape.top-top)*shape.scale);
   ctx.globalCompositeOperation=mode==='erase'?'destination-out':'source-over';ctx.fillStyle='#fff';ctx.beginPath();ctx.arc((point.x-left)*shape.scale,(point.y-top)*shape.scale,radius*shape.scale,0,Math.PI*2);ctx.fill();
   return{...shape,maskCanvas:canvas,left,top,maskId:Date.now()+Math.random()};
+}
+
+function editMaskWithPath(shape:MaskShape,path:Path2D,points:Point[],mode:'add'|'erase',imageWidth:number,imageHeight:number):MaskShape|null {
+  const scale=shape.scale,minX=Math.max(0,Math.floor(Math.min(...points.map(p=>p.x)))),minY=Math.max(0,Math.floor(Math.min(...points.map(p=>p.y)))),maxX=Math.min(imageWidth,Math.ceil(Math.max(...points.map(p=>p.x)))),maxY=Math.min(imageHeight,Math.ceil(Math.max(...points.map(p=>p.y))));
+  const left=mode==='add'?Math.min(shape.left,minX):shape.left,top=mode==='add'?Math.min(shape.top,minY):shape.top;
+  const right=mode==='add'?Math.max(shape.left+shape.maskCanvas.width/scale,maxX):shape.left+shape.maskCanvas.width/scale,bottom=mode==='add'?Math.max(shape.top+shape.maskCanvas.height/scale,maxY):shape.top+shape.maskCanvas.height/scale;
+  const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.ceil((right-left)*scale));canvas.height=Math.max(1,Math.ceil((bottom-top)*scale));
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});if(!ctx)return shape;
+  ctx.drawImage(shape.maskCanvas,(shape.left-left)*scale,(shape.top-top)*scale);
+  ctx.save();ctx.setTransform(scale,0,0,scale,-left*scale,-top*scale);ctx.globalCompositeOperation=mode==='erase'?'destination-out':'source-over';ctx.fillStyle='#fff';ctx.fill(path);ctx.restore();
+  const alpha=ctx.getImageData(0,0,canvas.width,canvas.height).data;let remains=false;for(let i=3;i<alpha.length;i+=4)if(alpha[i]){remains=true;break;}
+  if(!remains)return null;
+  return{...shape,maskCanvas:canvas,left,top,maskId:Date.now()+Math.random()};
+}
+
+function tintMask(shape:MaskShape,color:string):HTMLCanvasElement {
+  const canvas=document.createElement('canvas');canvas.width=shape.maskCanvas.width;canvas.height=shape.maskCanvas.height;
+  const ctx=canvas.getContext('2d');if(ctx){ctx.drawImage(shape.maskCanvas,0,0);ctx.globalCompositeOperation='source-in';ctx.fillStyle=color;ctx.fillRect(0,0,canvas.width,canvas.height);}
+  return canvas;
 }
 
 function colorFamily(color: Color) {
@@ -160,7 +182,7 @@ function App() {
   const [colorTolerance, setColorTolerance] = useState(34);
   const [colorScope, setColorScope] = useState<'connected'|'image'>('connected');
   const [colorSeed, setColorSeed] = useState<Point|null>(null);
-  const [maskEditMode, setMaskEditMode] = useState<'select'|'add'|'erase'>('select');
+  const [maskEditMode, setMaskEditMode] = useState<MaskEditMode>('select');
   const [brushSize, setBrushSize] = useState(24);
   const [areaMode, setAreaMode] = useState<'new' | 'add' | 'subtract'>('new');
   const [gesture, setGesture] = useState(false);
@@ -178,6 +200,7 @@ function App() {
   const [visibleCount, setVisibleCount] = useState(64);
   const [exportFormat, setExportFormat] = useState<'png' | 'jpg'>('png');
   const [toast, setToast] = useState('');
+  const maskTintRef = useRef<{ maskId:number; canvas:HTMLCanvasElement }|null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const edgeMapRef = useRef<EdgeMap | null>(null);
@@ -210,16 +233,17 @@ function App() {
       }
       ctx.restore();
     });
-    if (outlines && maskShape) { ctx.save();ctx.globalAlpha=.42;ctx.drawImage(maskShape.maskCanvas,maskShape.left,maskShape.top,maskShape.maskCanvas.width/maskShape.scale,maskShape.maskCanvas.height/maskShape.scale);ctx.restore(); }
+    if (outlines && maskShape) { let tint=maskTintRef.current;if(!tint||tint.maskId!==maskShape.maskId){tint={maskId:maskShape.maskId,canvas:tintMask(maskShape,'#20b875')};maskTintRef.current=tint;}ctx.save();ctx.globalAlpha=.48;ctx.drawImage(tint.canvas,maskShape.left,maskShape.top,maskShape.maskCanvas.width/maskShape.scale,maskShape.maskCanvas.height/maskShape.scale);ctx.restore(); }
     if (outlines && preview.length) {
       ctx.save(); ctx.strokeStyle = areaMode === 'subtract' ? '#e05b50' : '#b8754e'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+      if(maskShape&&tool==='polygon'&&(maskEditMode==='trace-add'||maskEditMode==='trace-erase')&&preview.length>=3){ctx.fillStyle=maskEditMode==='trace-add'?'rgba(32,184,117,.38)':'rgba(226,73,73,.4)';ctx.fill(makePath(preview));}
       if (tool === 'polygon' || tool === 'freehand') {
         ctx.stroke(makePath(preview,tool!=='polygon')); ctx.setLineDash([]);
         if (tool === 'polygon') preview.forEach(p => { for(const handle of [p.inHandle,p.outHandle])if(handle){ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(handle.x,handle.y);ctx.strokeStyle='rgba(184,117,78,.75)';ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.arc(handle.x,handle.y,4,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();ctx.stroke();}ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#b8754e'; ctx.stroke(); });
       } else if (preview.length > 1) ctx.stroke(makePath(preview));
       ctx.restore();
     }
-  }, [areaMode, maskShape, points, selectedId, selections, tool]);
+  }, [areaMode, maskEditMode, maskShape, points, selectedId, selections, tool]);
 
   useEffect(() => { const ctx = canvasRef.current?.getContext('2d'); if (ctx) draw(ctx); }, [draw, image]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timer); }, [toast]);
@@ -252,7 +276,7 @@ function App() {
     const p = pointFromEvent(e);
     if (!drawing && zoom > 1) { e.currentTarget.setPointerCapture(e.pointerId); setPanStart({ x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }); return; }
     if (!drawing) { const ctx = canvasRef.current?.getContext('2d'); if (ctx) { const hit = [...selections].reverse().find(s => s.shapes.some(shape=>containsPart(ctx,shape,p)) && !s.holes.some(shape=>containsPart(ctx,shape,p))); if (hit) setSelectedId(hit.id); } return; }
-    if (tool === 'wand') { if(maskShape&&maskEditMode!=='select'){e.currentTarget.setPointerCapture(e.pointerId);setGesture(true);const img=imageRef.current;if(img)setMaskShape(v=>v?paintMaskBrush(v,p,maskEditMode,brushSize,img.naturalWidth,img.naturalHeight):v);return;}setColorSeed(p);setPoints([]);return; }
+    if (tool === 'wand') { if(maskShape&&(maskEditMode==='add'||maskEditMode==='erase')){e.currentTarget.setPointerCapture(e.pointerId);setGesture(true);const img=imageRef.current;if(img)setMaskShape(v=>v?paintMaskBrush(v,p,maskEditMode,brushSize,img.naturalWidth,img.naturalHeight):v);return;}setColorSeed(p);setPoints([]);return; }
     if (tool === 'polygon') {
       const canvas=e.currentTarget,hitRadius=12*canvas.width/canvas.getBoundingClientRect().width;
       for(let i=points.length-1;i>=0;i--){const anchor=points[i];for(const [handle,mode] of [[anchor.inHandle,'in'],[anchor.outHandle,'out']] as const)if(handle&&Math.hypot(handle.x-p.x,handle.y-p.y)<=hitRadius){canvas.setPointerCapture(e.pointerId);setGesture(true);setCurveDrag({index:i,start:p,mode});return;}}
@@ -264,7 +288,7 @@ function App() {
   const handlePointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
     if (panStart) { setPan({ x: panStart.panX + e.clientX - panStart.x, y: panStart.panY + e.clientY - panStart.y }); return; }
     if (!drawing || !gesture) return; const p = pointFromEvent(e);
-    if(tool==='wand'&&maskShape&&maskEditMode!=='select'){const img=imageRef.current;if(img)setMaskShape(v=>v?paintMaskBrush(v,p,maskEditMode,brushSize,img.naturalWidth,img.naturalHeight):v);return;}
+    if(tool==='wand'&&maskShape&&(maskEditMode==='add'||maskEditMode==='erase')){const img=imageRef.current;if(img)setMaskShape(v=>v?paintMaskBrush(v,p,maskEditMode,brushSize,img.naturalWidth,img.naturalHeight):v);return;}
     if(tool==='polygon'&&curveDrag){if(Math.hypot(p.x-curveDrag.start.x,p.y-curveDrag.start.y)<3*e.currentTarget.width/e.currentTarget.getBoundingClientRect().width)return;setPoints(v=>v.map((point,i)=>{if(i!==curveDrag.index)return point;if(curveDrag.mode==='new')return{...point,outHandle:p,inHandle:{x:2*curveDrag.start.x-p.x,y:2*curveDrag.start.y-p.y}};if(curveDrag.mode==='in')return{...point,inHandle:p};if(curveDrag.mode==='out')return{...point,outHandle:p};const dx=p.x-curveDrag.start.x,dy=p.y-curveDrag.start.y;return{x:point.x+dx,y:point.y+dy,...(point.inHandle?{inHandle:{x:point.inHandle.x+dx,y:point.inHandle.y+dy}}:{}),...(point.outHandle?{outHandle:{x:point.outHandle.x+dx,y:point.outHandle.y+dy}}:{})};}));return;}
     setPoints(v => tool === 'freehand' ? [...v,p] : [v[0],p]);
   };
@@ -272,6 +296,7 @@ function App() {
   const changeZoom = (next: number) => { const value = Math.max(1, Math.min(4, next)); setZoom(value); if (value === 1) setPan({ x: 0, y: 0 }); };
   const minimumPoints = tool === 'wand' ? 0 : 3;
   const canFinish = tool==='wand' ? maskShape!==null : points.length>=minimumPoints;
+  const isMaskTrace=maskEditMode==='trace-add'||maskEditMode==='trace-erase';
   const makeCurrentShape = (): SurfacePart => tool==='wand' && maskShape ? maskShape : ({ path: makePath(points), points, tool });
   const saveArea = () => { if(renaming && selectedId!==null){setSelections(v=>v.map(s=>s.id===selectedId?{...s,name:name.trim()||s.name}:s));setRenaming(false);setNaming(false);setName('');setToast('Surface renamed.');return;} if (tool!=='wand' && points.length < minimumPoints || tool==='wand' && !maskShape) return; const shape=makeCurrentShape(); setSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, shapes:[shape], holes:[], color: null, opacity: 1 }]); setPoints([]); setMaskShape(null);setColorSeed(null); setName(''); setNaming(false); setDrawing(false); setAreaMode('new'); setToast('Surface saved. Pick a paint color to preview it.'); };
   const startDrawing = (mode: 'new'|'add'|'subtract') => { setDrawing(true); setAreaMode(mode); setTool('polygon'); setEdgeSnap(false); setGesture(false); setPoints([]);setMaskShape(null);setColorSeed(null);setMaskEditMode('select'); if (mode==='new') {setSelectedId(null);setMultiSelectedIds([]);} };
@@ -283,6 +308,7 @@ function App() {
     setSelections(v=>v.map(s=>s.id!==selectedId?s:areaMode==='add'?{...s,shapes:[...s.shapes,shape]}:{...s,holes:[...s.holes,shape]}));
     paintCache.current.delete(selectedId); setPoints([]);setMaskShape(null); setDrawing(false); setAreaMode('new'); setToast(areaMode==='add'?'Area added to the paint mask.':'Object cut out of the paint mask.');
   };
+  const finishMaskTrace = () => {if(!maskShape||points.length<3||!imageRef.current)return;const mode=maskEditMode==='trace-erase'?'erase':'add';const next=editMaskWithPath(maskShape,makePath(points),points,mode,imageRef.current.naturalWidth,imageRef.current.naturalHeight);setMaskShape(next);setPoints([]);setCurveDrag(null);setColorSeed(null);setTool('wand');setMaskEditMode('select');setToast(mode==='add'?'Traced region added to the color selection.':next?'Traced region removed from the color selection.':'Color selection cleared.');};
   const apply = () => { if (!selected) return; setSelections(v => v.map(s => s.id === selected.id ? { ...s, color: color.colorValue, colorName: color.colorName, colorCode: color.colorCode } : s)); setToast(`${color.colorName} applied to ${selected.name}.`); };
   const setOpacity = (opacity: number) => { if (selected) setSelections(v => v.map(s => s.id === selected.id ? { ...s, opacity } : s)); };
   const remove = () => { setSelections(v => v.filter(s => s.id !== selectedId)); if(selectedId!==null)paintCache.current.delete(selectedId); setSelectedId(null); };
@@ -301,19 +327,18 @@ function App() {
           {image && <div className="canvas-caption"><span><span className="live-dot"/>{drawing ? 'Outline mode' : zoom > 1 ? 'Drag image to pan' : 'Your room'}</span><div className="canvas-tools"><button aria-label="Zoom out" title="Zoom out" disabled={zoom<=1} onClick={()=>changeZoom(zoom-.25)}><ZoomOut size={14}/></button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom in" title="Zoom in" disabled={zoom>=4} onClick={()=>changeZoom(zoom+.25)}><ZoomIn size={14}/></button><button onClick={()=>changeZoom(1)}>Fit</button><button onClick={() => fileRef.current?.click()}><RotateCcw size={14}/> Change photo</button></div></div>}
         </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={e => upload(e.target.files?.[0])}/>
-        <div className="steps"><div className="step"><span>01</span><div><b>Add a photo</b><small>Choose your room</small></div></div><ChevronRight size={15}/><div className="step"><span>02</span><div><b>Trace a surface</b><small>Mark the area</small></div></div><ChevronRight size={15}/><div className="step"><span>03</span><div><b>Explore color</b><small>Find your finish</small></div></div></div>
       </section>
       <aside className="side-panel"><div className="panel-heading"><div><span className="panel-kicker">YOUR PROJECT</span><h2>Color your space</h2></div><span className="count-pill">{selections.length} {selections.length === 1 ? 'area' : 'areas'}</span></div>
         <div className="area-section"><div className="section-label">SURFACES <span>{selections.length ? `${selections.length} saved` : 'Optional'}</span></div>
           {selections.length === 0 ? <div className="empty-areas"><div className="empty-area-icon"><Plus size={17}/></div><div><b>No surfaces yet</b><p>{image ? 'Create a surface or select a color region.' : 'Upload a photo, then create a surface.'}</p></div></div> : <details className="surface-dropdown"><summary><span className="surface-current"><b>{selected?.name??'Choose a surface'}</b><small>{selected?.colorName??'Select an area to edit or paint'}</small></span><ChevronDown size={15}/></summary><div className="area-list">{selections.map(s => <button key={s.id} className={`area-row ${selectedId===s.id||multiSelectedIds.includes(s.id)?'active':''}`} onClick={e=>{if(e.shiftKey){setMultiSelectedIds(v=>v.includes(s.id)?v.filter(id=>id!==s.id):[...v,s.id]);}else{setSelectedId(s.id);setMultiSelectedIds([]);e.currentTarget.closest('details')?.removeAttribute('open');}}}><span className="area-swatch" style={{background:s.color || '#eee8e2'}}/><span className="area-text"><b>{s.name}</b><small>{s.colorName || 'No paint applied'}</small></span><span className="area-arrow">{multiSelectedIds.includes(s.id)?'Grouped':selectedId===s.id?'Selected':'›'}</span></button>)}</div></details>}
           {selections.length>1&&!drawing&&<p className="surface-help">Shift-click areas to select multiple for merging.</p>}
           {selected && !drawing && <div className="surface-actions"><button onClick={()=>{setName(selected.name);setRenaming(true);setNaming(true);}}>Rename surface</button><button className="remove-surface" onClick={remove}>Remove surface</button>{selected.mergedFrom&&<button onClick={splitSelected}>Split merged area</button>}{new Set([selectedId,...multiSelectedIds]).size>1&&<button onClick={mergeSelected}>Merge selected</button>}</div>}
-          {image && <div className={`area-actions ${drawing?'drawing-actions':'mask-actions'}`}>{drawing ? <><button className="secondary-button" onClick={() => {setDrawing(false);setGesture(false);setCurveDrag(null);setPoints([]);setMaskShape(null);setColorSeed(null);setAreaMode('new');}}><X size={15}/> Cancel</button><button className="primary-button compact" disabled={!canFinish} onClick={finishDrawing}><Check size={15}/> {areaMode==='new'?'Finish area':'Finish mask'}</button></> : <><button className="outline-button" onClick={() => startDrawing('new')}><Plus size={16}/> Create surface</button>{selected && <><button className="mask-action" onClick={() => startDrawing('add')}><Plus size={13}/> Add to mask</button><button className="mask-action subtract" onClick={() => startDrawing('subtract')}><X size={13}/> Cut object out</button></>}</>}</div>}
-          {drawing && <><div className="tool-picker" aria-label="Surface drawing tools">
+          {image && <div className={`area-actions ${drawing?'drawing-actions':'mask-actions'}`}>{drawing ? <><button className="secondary-button" onClick={() => {if(isMaskTrace){setTool('wand');setMaskEditMode('select');setPoints([]);setCurveDrag(null);setGesture(false);setColorSeed(null);}else{setDrawing(false);setGesture(false);setCurveDrag(null);setPoints([]);setMaskShape(null);setColorSeed(null);setAreaMode('new');}}}><X size={15}/> {isMaskTrace?'Cancel trace':'Cancel'}</button><button className="primary-button compact" disabled={isMaskTrace?points.length<3:!canFinish} onClick={isMaskTrace?finishMaskTrace:finishDrawing}><Check size={15}/> {isMaskTrace?'Apply to selection':areaMode==='new'?'Finish area':'Finish mask'}</button></> : <><button className="outline-button" onClick={() => startDrawing('new')}><Plus size={16}/> Create surface</button>{selected && <><button className="mask-action" onClick={() => startDrawing('add')}><Plus size={13}/> Add to mask</button><button className="mask-action subtract" onClick={() => startDrawing('subtract')}><X size={13}/> Cut object out</button></>}</>}</div>}
+          {drawing && <>{!isMaskTrace&&<div className="tool-picker" aria-label="Surface drawing tools">
             <button className={tool==='polygon'?'active':''} onClick={()=>{setTool('polygon');setMaskShape(null);setColorSeed(null);setMaskEditMode('select');setGesture(false);setCurveDrag(null);setPoints([]);}}><Pencil size={15}/> Point trace</button>
             <button className={tool==='freehand'?'active':''} onClick={()=>{setTool('freehand');setMaskShape(null);setColorSeed(null);setMaskEditMode('select');setGesture(false);setCurveDrag(null);setPoints([]);}}><Pencil size={15}/> Freehand</button>
             <button className={tool==='wand'?'active':''} onClick={()=>{setTool('wand');setPoints([]);setMaskShape(null);setColorSeed(null);setMaskEditMode('select');setGesture(false);setCurveDrag(null);}}><Wand2 size={15}/> Select similar color</button>
-          </div>{tool==='polygon' && <><button className={`edge-snap ${edgeSnap?'active':''}`} onClick={()=>setEdgeSnap(v=>!v)}><Magnet size={13}/>{edgeSnap?'Edge snap on':'Snap clicks to edges'}</button><p className="drawing-tip curve-help">Click to add points. Drag from a point to set curve direction and strength; drag either handle to fine-tune. The line stays open until you finish.</p></>}{tool==='wand'&&<><label className="tolerance-control">Color tolerance <b>{colorTolerance}%</b><input aria-label="Color tolerance" type="range" min="8" max="100" value={colorTolerance} onChange={e=>setColorTolerance(Number(e.target.value))}/></label><label className="color-scope-control"><input type="checkbox" checked={colorScope==='image'} onChange={e=>setColorScope(e.target.checked?'image':'connected')}/><span><b>Match across whole image</b><small>Select disconnected regions with similar colors.</small></span></label>{maskShape&&<><div className="mask-edit-tools" aria-label="Edit selected color mask"><button className={maskEditMode==='select'?'active':''} onClick={()=>setMaskEditMode('select')}>Select</button><button className={maskEditMode==='add'?'active':''} onClick={()=>setMaskEditMode('add')}>Restore brush</button><button className={maskEditMode==='erase'?'active':''} onClick={()=>setMaskEditMode('erase')}>Erase brush</button></div>{maskEditMode!=='select'&&<label className="tolerance-control brush-control">Brush size <b>{brushSize}px</b><input aria-label="Mask brush size" type="range" min="6" max="120" value={brushSize} onChange={e=>setBrushSize(Number(e.target.value))}/></label>}</>}<p className="drawing-tip">{areaMode==='subtract'?'Trace or select the window, furniture, or object to keep paint off it.':areaMode==='add'?'Add another patch to this paint mask.':maskShape&&maskEditMode==='erase'?'Drag over unwanted parts of the selection to erase them.':maskShape&&maskEditMode==='add'?'Drag to restore missed surface areas.':maskShape?'Color region selected — adjust tolerance, refine it, then finish.':colorScope==='image'?'Click a color to select matching areas across the photo.':'Click a color region; change tolerance to update the selection.'}</p></>}</>}
+          </div>}{tool==='polygon' && <><button className={`edge-snap ${edgeSnap?'active':''}`} onClick={()=>setEdgeSnap(v=>!v)}><Magnet size={13}/>{edgeSnap?'Edge snap on':'Snap clicks to edges'}</button><p className="drawing-tip curve-help">{isMaskTrace?'Click to outline the mask change; drag anchors and handles to shape it. Green adds; red removes.':'Click to add points. Drag from a point to set curve direction and strength; drag either handle to fine-tune. The line stays open until you finish.'}</p></>}{tool==='wand'&&<><label className="tolerance-control">Color tolerance <b>{colorTolerance}%</b><input aria-label="Color tolerance" type="range" min="8" max="100" value={colorTolerance} onChange={e=>setColorTolerance(Number(e.target.value))}/></label><label className="color-scope-control"><input type="checkbox" checked={colorScope==='image'} onChange={e=>setColorScope(e.target.checked?'image':'connected')}/><span><b>Match across whole image</b><small>Select disconnected regions with similar colors.</small></span></label>{maskShape&&<><div className="mask-edit-tools" aria-label="Edit selected color mask"><button className={maskEditMode==='select'?'active':''} onClick={()=>setMaskEditMode('select')}>Select</button><button className={maskEditMode==='add'?'active':''} onClick={()=>setMaskEditMode('add')}>Restore brush</button><button className={maskEditMode==='erase'?'active':''} onClick={()=>setMaskEditMode('erase')}>Erase brush</button><button className={maskEditMode==='trace-add'?'active':''} onClick={()=>{setMaskEditMode('trace-add');setTool('polygon');setPoints([]);setCurveDrag(null);setGesture(false);}}>Trace add</button><button className={maskEditMode==='trace-erase'?'active':''} onClick={()=>{setMaskEditMode('trace-erase');setTool('polygon');setPoints([]);setCurveDrag(null);setGesture(false);}}>Trace erase</button></div>{(maskEditMode==='add'||maskEditMode==='erase')&&<label className="tolerance-control brush-control">Brush size <b>{brushSize}px</b><input aria-label="Mask brush size" type="range" min="6" max="120" value={brushSize} onChange={e=>setBrushSize(Number(e.target.value))}/></label>}</>}<p className="drawing-tip">{areaMode==='subtract'?'Trace or select the window, furniture, or object to keep paint off it.':areaMode==='add'?'Add another patch to this paint mask.':maskShape&&maskEditMode==='erase'?'Drag over unwanted parts of the selection to erase them.':maskShape&&maskEditMode==='add'?'Drag to restore missed surface areas.':maskShape?'Color selection is green. Adjust tolerance or refine it before applying.':colorScope==='image'?'Click a color to select matching areas across the photo.':'Click a color region; change tolerance to update the selection.'}</p></>}</>}
         </div>
         <div className="palette-section"><div className="section-label">COLOR PALETTE <span>{palette.length.toLocaleString()} colors</span></div><div className="selected-color"><span className="selected-dot" style={{background:color.colorValue}}/><div><b>{color.colorName}</b><small>{color.colorCode} · {color.colorTone}</small></div><span className="finish-tag">SAMPLE</span></div><div className="palette-filters"><select aria-label="Color family" value={family} onChange={e=>setFamily(e.target.value)}>{['All colors','Whites','Neutrals','Blacks','Reds','Oranges','Yellows','Greens','Cyans','Blues','Purples','Pinks'].map(f=><option key={f}>{f}</option>)}</select><label className="search-box"><Palette size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a color or finish"/><kbd>/</kbd></label></div><div className="swatch-grid color-list" onScroll={e=>{const el=e.currentTarget;if(el.scrollTop+el.clientHeight>=el.scrollHeight-24)setVisibleCount(v=>Math.min(v+64,palette.length));}}>{palette.slice(0, visibleCount).map(c => <button key={c.colorCode} title={`${c.colorName} · ${c.colorCode}`} aria-label={`Choose ${c.colorName}`} onClick={() => setColor(c)} className={`color-list-item ${color.colorCode===c.colorCode?'chosen':''}`}><span className="color-chip" style={{background:c.colorValue}}/><span className="color-list-copy"><b>{c.colorName}</b><small>{c.colorCode}</small></span>{color.colorCode===c.colorCode&&<Check size={13}/>}</button>)}</div><p className="palette-foot">Showing {Math.min(palette.length,visibleCount).toLocaleString()} of {palette.length.toLocaleString()} · scroll for more</p>
           {selected && <label className="opacity-control"><span>Paint coverage <b>{Math.round(selected.opacity*100)}%</b></span><input aria-label="Paint coverage" type="range" min="25" max="100" value={Math.round(selected.opacity*100)} onChange={e=>setOpacity(Number(e.target.value)/100)}/><small>At 100%, paint covers the old color while keeping the photo’s lighting and texture.</small></label>}
@@ -321,7 +346,6 @@ function App() {
         </div><div className="privacy-note"><span>✳</span><p>Your photo stays on this device. We never upload or store your images.</p></div>
       </aside>
     </main>
-    <footer className="footer"><span>huehouse <span>·</span> Make room for color.</span><span>Made for the home you love</span></footer>
     {naming && <div className="modal-backdrop" onMouseDown={e => {if(e.target===e.currentTarget){setNaming(false);setRenaming(false);}}}><form className="name-modal" onSubmit={e => {e.preventDefault();saveArea();}}><button type="button" className="modal-close" onClick={() => {setNaming(false);setRenaming(false);}}><X size={18}/></button><span className="panel-kicker">{renaming?'SURFACE OPTIONS':'NEW SURFACE'}</span><h2>{renaming?'Rename surface':'Name this area'}</h2><p>{renaming?'Choose a clear name for this part of your project.':'Give your surface a name so you can keep track of your color ideas.'}</p><input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Living room wall"/><div className="modal-actions"><button type="button" className="secondary-button" onClick={() => {setNaming(false);setRenaming(false);}}>Cancel</button><button className="primary-button compact" type="submit"><Check size={15}/> {renaming?'Save name':'Save surface'}</button></div></form></div>}
     {toast && <div className="toast"><Check size={15}/>{toast}</div>}
   </div>;
