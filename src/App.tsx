@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowDownToLine, Check, ChevronRight, Circle, ImagePlus, Paintbrush, Palette, Pencil, Pentagon, Plus, RotateCcw, Square, Trash2, Upload, X } from 'lucide-react';
+import { ArrowDownToLine, Check, ChevronRight, Circle, ImagePlus, Paintbrush, Palette, Pencil, Pentagon, Plus, RotateCcw, Square, Trash2, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { colors } from './colors';
 
 type Point = { x: number; y: number };
@@ -63,6 +63,9 @@ function App() {
   const [drawing, setDrawing] = useState(false);
   const [tool, setTool] = useState<Tool>('polygon');
   const [gesture, setGesture] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [panStart, setPanStart] = useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [color, setColor] = useState<Color>(colors[0]);
   const [name, setName] = useState('');
@@ -109,22 +112,25 @@ function App() {
     if (!file.type.startsWith('image/')) { setToast('Choose an image file to get started.'); return; }
     const url = URL.createObjectURL(file); const img = new Image();
     img.onload = () => { const canvas = canvasRef.current; if (canvas) { canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; }
-      paintCache.current.clear();
+      paintCache.current.clear(); setZoom(1); setPan({ x: 0, y: 0 });
       imageRef.current = img; setImage(url); setSelections([]); setPoints([]); setSelectedId(null); setDrawing(false); setToast('Photo added — outline an area to begin.'); };
     img.onerror = () => setToast('This photo could not be opened. Try another file.'); img.src = url;
   };
   const pointFromEvent = (e: PointerEvent<HTMLCanvasElement>) => { const c = canvasRef.current!; const r = c.getBoundingClientRect(); return { x: (e.clientX-r.left)*c.width/r.width, y: (e.clientY-r.top)*c.height/r.height }; };
   const handlePointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
     const p = pointFromEvent(e);
+    if (!drawing && zoom > 1) { e.currentTarget.setPointerCapture(e.pointerId); setPanStart({ x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }); return; }
     if (!drawing) { const ctx = canvasRef.current?.getContext('2d'); if (ctx) { const hit = [...selections].reverse().find(s => ctx.isPointInPath(s.path, p.x, p.y)); if (hit) setSelectedId(hit.id); } return; }
     if (tool === 'polygon') { setPoints(v => [...v,p]); return; }
     e.currentTarget.setPointerCapture(e.pointerId); setGesture(true); setPoints([p]);
   };
   const handlePointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
+    if (panStart) { setPan({ x: panStart.panX + e.clientX - panStart.x, y: panStart.panY + e.clientY - panStart.y }); return; }
     if (!drawing || !gesture) return; const p = pointFromEvent(e);
     setPoints(v => tool === 'freehand' ? [...v,p] : [v[0],p]);
   };
-  const handlePointerUp = () => setGesture(false);
+  const handlePointerUp = () => { setGesture(false); setPanStart(null); };
+  const changeZoom = (next: number) => { const value = Math.max(1, Math.min(4, next)); setZoom(value); if (value === 1) setPan({ x: 0, y: 0 }); };
   const minimumPoints = tool === 'polygon' || tool === 'freehand' ? 3 : 2;
   const saveArea = () => { if (points.length < minimumPoints) return; const path = makePath(tool, points); setSelections(v => [...v, { id: Date.now(), name: name.trim() || `Area ${v.length+1}`, path, points, tool, color: null, opacity: 1 }]); setPoints([]); setName(''); setNaming(false); setDrawing(false); setToast('Surface saved. Pick a paint color to preview it.'); };
   const apply = () => { if (!selected) return; setSelections(v => v.map(s => s.id === selected.id ? { ...s, color: color.colorValue, colorName: color.colorName, colorCode: color.colorCode } : s)); setToast(`${color.colorName} applied to ${selected.name}.`); };
@@ -138,8 +144,8 @@ function App() {
       <section className="main-column"><div className="eyebrow">ROOM COLOR STUDIO <span className="eyebrow-line"/></div><h1>See the color<br/><em>before you paint.</em></h1><p className="intro">Try a new look on your own space. Upload a photo, trace a surface, and explore the palette.</p>
         <div className={`canvas-card ${image ? 'has-image' : ''}`}>
           {!image && <div className="upload-empty"><div className="upload-icon"><ImagePlus size={25}/></div><h2>Start with a photo of your space</h2><p>For best results, use a clear, well-lit photo with the surface you want to recolor in view.</p><button className="primary-button" onClick={() => fileRef.current?.click()}><Upload size={17}/> Upload a photo</button><span className="file-note">JPG, PNG or WEBP · stored on your device</span><div className="drop-hint">or drop an image anywhere in this area</div></div>}
-          <canvas ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} className={image ? (drawing ? 'drawing-canvas' : 'view-canvas') : 'hidden-canvas'} />
-          {image && <div className="canvas-caption"><span><span className="live-dot"/>{drawing ? 'Outline mode' : 'Your room'}</span><button onClick={() => fileRef.current?.click()}><RotateCcw size={14}/> Change photo</button></div>}
+          <canvas ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }} className={image ? (drawing ? 'drawing-canvas' : zoom > 1 ? 'panning-canvas' : 'view-canvas') : 'hidden-canvas'} />
+          {image && <div className="canvas-caption"><span><span className="live-dot"/>{drawing ? 'Outline mode' : zoom > 1 ? 'Drag image to pan' : 'Your room'}</span><div className="canvas-tools"><button aria-label="Zoom out" title="Zoom out" disabled={zoom<=1} onClick={()=>changeZoom(zoom-.25)}><ZoomOut size={14}/></button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom in" title="Zoom in" disabled={zoom>=4} onClick={()=>changeZoom(zoom+.25)}><ZoomIn size={14}/></button><button onClick={()=>changeZoom(1)}>Fit</button><button onClick={() => fileRef.current?.click()}><RotateCcw size={14}/> Change photo</button></div></div>}
         </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={e => upload(e.target.files?.[0])}/>
         <div className="steps"><div className="step"><span>01</span><div><b>Add a photo</b><small>Choose your room</small></div></div><ChevronRight size={15}/><div className="step"><span>02</span><div><b>Trace a surface</b><small>Mark the area</small></div></div><ChevronRight size={15}/><div className="step"><span>03</span><div><b>Explore color</b><small>Find your finish</small></div></div></div>
@@ -155,7 +161,7 @@ function App() {
             <button className={tool==='ellipse'?'active':''} onClick={()=>{setTool('ellipse');setGesture(false);setPoints([]);}}><Circle size={15}/> Oval</button>
           </div><p className="drawing-tip">{tool==='polygon'?'Click around the edge; click Finish when the outline is closed.':tool==='freehand'?'Press and drag around the surface edge, then release.':'Click and drag to fit the shape to the surface.'}</p></>}
         </div>
-        <div className="palette-section"><div className="section-label">COLOR PALETTE <span>{palette.length} colors</span></div><div className="selected-color"><span className="selected-dot" style={{background:color.colorValue}}/><div><b>{color.colorName}</b><small>{color.colorCode} · {color.colorTone}</small></div><span className="finish-tag">SAMPLE</span></div><label className="search-box"><Palette size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a color or finish"/><kbd>/</kbd></label><div className="swatch-grid">{palette.slice(0, 48).map(c => <button key={c.colorCode} title={`${c.colorName} · ${c.colorCode}`} aria-label={`Choose ${c.colorName}`} onClick={() => setColor(c)} className={`swatch ${color.colorCode===c.colorCode?'chosen':''}`} style={{background:c.colorValue}}>{color.colorCode===c.colorCode&&<Check size={13}/>}</button>)}</div><p className="palette-foot">Showing {Math.min(palette.length,48)} of {palette.length} colors</p>
+        <div className="palette-section"><div className="section-label">COLOR PALETTE <span>{palette.length} colors</span></div><div className="selected-color"><span className="selected-dot" style={{background:color.colorValue}}/><div><b>{color.colorName}</b><small>{color.colorCode} · {color.colorTone}</small></div><span className="finish-tag">SAMPLE</span></div><label className="search-box"><Palette size={15}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Find a color or finish"/><kbd>/</kbd></label><div className="swatch-grid">{palette.slice(0, 32).map(c => <button key={c.colorCode} title={`${c.colorName} · ${c.colorCode}`} aria-label={`Choose ${c.colorName}`} onClick={() => setColor(c)} className={`swatch ${color.colorCode===c.colorCode?'chosen':''}`} style={{background:c.colorValue}}>{color.colorCode===c.colorCode&&<Check size={13}/>}</button>)}</div><p className="palette-foot">Showing {Math.min(palette.length,32)} of {palette.length} colors</p>
           {selected && <label className="opacity-control"><span>Paint coverage <b>{Math.round(selected.opacity*100)}%</b></span><input aria-label="Paint coverage" type="range" min="25" max="100" value={Math.round(selected.opacity*100)} onChange={e=>setOpacity(Number(e.target.value)/100)}/><small>At 100%, paint covers the old color while keeping the photo’s lighting and texture.</small></label>}
           <button className="apply-button" disabled={!selected} onClick={apply}><Paintbrush size={16}/>{selected ? `Preview on ${selected.name}` : 'Select a surface to preview'}</button>{selected && <button className="delete-link" onClick={remove}><Trash2 size={13}/> Remove {selected.name}</button>}
         </div><div className="privacy-note"><span>✳</span><p>Your photo stays on this device. We never upload or store your images.</p></div>
