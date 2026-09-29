@@ -64,7 +64,7 @@ type CurveDrag = {
   mode: "anchor" | "segment" | "move";
 };
 const families = [
-  "All colors",
+  "All colours",
   "Whites",
   "Neutrals",
   "Blacks",
@@ -118,7 +118,7 @@ function App() {
   const [name, setName] = useState("");
   const [naming, setNaming] = useState(false);
   const [query, setQuery] = useState("");
-  const [family, setFamily] = useState("All colors");
+  const [family, setFamily] = useState("All colours");
   const [visibleCount, setVisibleCount] = useState(64);
   const [exportFormat, setExportFormat] = useState<"png" | "jpg">("png");
   const [toast, setToast] = useState("");
@@ -201,7 +201,7 @@ function App() {
     () =>
       (colors as Color[]).filter(
         (c) =>
-          (family === "All colors" || colorFamily(c) === family) &&
+          (family === "All colours" || colorFamily(c) === family) &&
           `${c.colorName} ${c.colorCode} ${c.colorTone}`
             .toLowerCase()
             .includes(query.toLowerCase()),
@@ -467,7 +467,7 @@ function App() {
           setPhotoName(project.name);
           lastTool.current = project.tool;
           setTool(project.tool);
-          setToast("Your last project is ready.");
+          setToast("Previous project restored.");
         }
         setSaveStatus(project ? "Saved on this device" : "Local workspace");
       } catch {
@@ -560,7 +560,7 @@ function App() {
         );
       installPhoto(img, url, file);
       setPhotoName(file.name);
-      setToast("Photo ready. Create a surface to start painting.");
+      setToast("Photograph imported. Define a surface to continue.");
     } catch (error) {
       URL.revokeObjectURL(url);
       if (generation === loadGeneration.current)
@@ -880,7 +880,7 @@ function App() {
     setSelectedId(id);
     resetDrawing();
     setPanel("colors");
-    setToast("Surface ready. Tap a color to paint it.");
+    setToast("Surface created. Select a shade to apply.");
   };
   const startDrawing = (mode: "new" | "add" | "subtract") => {
     resetDrawing();
@@ -982,10 +982,10 @@ function App() {
     setMaskEditMode("select");
     setToast(
       mode === "add"
-        ? "Traced region added to the color selection."
+        ? "Traced region added to the colour selection."
         : next
-          ? "Traced region removed from the color selection."
-          : "Color selection cleared.",
+          ? "Traced region removed from the colour selection."
+          : "Colour selection cleared.",
     );
   };
   const chooseColor = (next: Color) => {
@@ -1077,13 +1077,13 @@ function App() {
     draw(ctx, false, []);
     const jpg = exportFormat === "jpg";
     const a = document.createElement("a");
-    a.download = `room-preview.${exportFormat}`;
+    a.download = `visualizer-preview.${exportFormat}`;
     a.href = out.toDataURL(
       jpg ? "image/jpeg" : "image/png",
       jpg ? 0.92 : undefined,
     );
     a.click();
-    setToast(`Your ${jpg ? "JPG" : "PNG"} preview is ready to share.`);
+    setToast(`${jpg ? "JPG" : "PNG"} preview exported.`);
   };
 
   const cancelDrawing = () => {
@@ -1115,13 +1115,20 @@ function App() {
       }}
     >
       <header className="topbar">
-        <a className="brand" href="#" aria-label="huehouse home">
+        <a className="brand" href="#" aria-label="Visualizer home">
           <span className="brand-mark">
-            <Paintbrush size={21} />
+            <svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true">
+              <path d="M4 6h7l8 20h-7L4 6Z" fill="currentColor" />
+              <path
+                d="m21 6-5 12 4 8L28 6h-7Z"
+                fill="currentColor"
+                opacity=".55"
+              />
+            </svg>
           </span>
-          huehouse
+          Visualizer
           <span className="brand-divider" />
-          <span className="brand-subtitle">Paint studio</span>
+          <span className="brand-subtitle">Colour studio</span>
         </a>
         <div className="header-actions">
           <span
@@ -1160,7 +1167,7 @@ function App() {
       <main className="workspace">
         <div className="workspace-heading">
           <div>
-            <h1>Paint color studio</h1>
+            <h1>Colour studio</h1>
             <p>Preview paint on walls, borders and more.</p>
           </div>
           <span className="local-badge">
@@ -1173,9 +1180,9 @@ function App() {
         >
           <div className="preview-header">
             <div>
-              <span className="section-title">Photo preview</span>
+              <span className="section-title">Project canvas</span>
               <span className="photo-name" title={photoName}>
-                {photoName || "Your customer’s space"}
+                {photoName || "No photograph imported"}
               </span>
             </div>
             <button
@@ -1211,27 +1218,18 @@ function App() {
           <div className={`canvas-card ${image ? "has-image" : ""}`}>
             {!image && (
               <div className="upload-empty">
-                <div className="upload-illustration" aria-hidden="true">
-                  <span className="mini-house">
-                    <span />
-                    <i />
-                  </span>
-                  <span className="sample-stack">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
+                <div className="material-study" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                  <div className="material-line" />
                 </div>
-                <span className="eyebrow">START WITH A PHOTO</span>
-                <h2>
-                  Add a photo
-                  <br />
-                  to get started.
-                </h2>
+                <span className="eyebrow">INTERIORS &amp; EXTERIORS</span>
+                <h2>Colour, in context.</h2>
                 <p>
-                  Add a photo of a room or house.
+                  Bring the shade card to your customer's space.
                   <br />
-                  Trace the parts you want to paint, then explore colors.
+                  Import a site photograph to create a colour study.
                 </p>
                 <button
                   className="primary-button"
@@ -1239,10 +1237,10 @@ function App() {
                   onClick={() => fileRef.current?.click()}
                 >
                   <Upload size={18} />
-                  {!ready ? "Opening workspace…" : "Choose a photo"}
+                  {!ready ? "Opening workspace…" : "Import photograph"}
                 </button>
                 <span className="file-note">
-                  or drag a photo here · JPG, PNG, WEBP · up to 30 MB
+                  JPG / PNG / WEBP · 30 MB max · drag & drop supported
                 </span>
               </div>
             )}
@@ -1316,9 +1314,9 @@ function App() {
             <span>
               {drawing
                 ? "Finish your surface to save these edits."
-                : "Tip: trace once, then try as many colors as you like."}
+                : "Local workspace · Original resolution export"}
             </span>
-            <span>Preview colors may differ from actual paint.</span>
+            <span>Verify final colours against a physical shade card.</span>
           </div>
           <input
             ref={fileRef}
@@ -1364,7 +1362,7 @@ function App() {
               }}
               onClick={() => setPanel("colors")}
             >
-              <Palette size={17} /> Colors
+              <Palette size={17} /> Colours
             </button>
           </div>
           {panel === "surfaces" ? (
@@ -1385,12 +1383,12 @@ function App() {
                           : areaMode === "add"
                             ? "Extend surface"
                             : "Create a surface"
-                      : "Your surfaces"}
+                      : "Surface manager"}
                   </h2>
                   <p>
                     {drawing
                       ? "Mark the area you want to change."
-                      : "Give each part of the space its own color."}
+                      : "Define walls, trims and other paintable areas."}
                   </p>
                 </div>
                 {!drawing && (
@@ -1419,11 +1417,11 @@ function App() {
                   {selections.length === 0 ? (
                     <div className="empty-surfaces">
                       <Layers size={27} />
-                      <b>No surfaces yet.</b>
+                      <b>No surfaces defined</b>
                       <p>
                         {image
-                          ? "Create your first surface on the photo."
-                          : "Add a photo to start marking walls, borders and more."}
+                          ? "Outline a paintable area on the canvas."
+                          : "Import a photograph to define surfaces."}
                       </p>
                     </div>
                   ) : (
@@ -1446,9 +1444,7 @@ function App() {
                             />
                             <span className="area-text">
                               <b>{s.name}</b>
-                              <small>
-                                {s.colorName || "Ready for a color"}
-                              </small>
+                              <small>{s.colorName || "No shade applied"}</small>
                             </span>
                             {selectedId === s.id && <Check size={16} />}
                           </button>
@@ -1486,7 +1482,7 @@ function App() {
                           disabled={!canEditSurface}
                           title={
                             canEditSurface
-                              ? "Adjust the outline or brush the color selection"
+                              ? "Adjust the outline or brush the colour selection"
                               : "Use add or cutout tools for surfaces with multiple parts"
                           }
                         >
@@ -1541,7 +1537,7 @@ function App() {
                       className="outline-button full-width"
                       onClick={() => setPanel("colors")}
                     >
-                      <Palette size={17} /> Choose a color
+                      <Palette size={17} /> Browse shades
                     </button>
                   )}
                 </>
@@ -1580,7 +1576,7 @@ function App() {
                       >
                         <Paintbrush size={18} />
                         <span>
-                          Select similar color
+                          Select similar colour
                           <small>Click a patch of the wall</small>
                         </span>
                       </button>
@@ -1640,10 +1636,10 @@ function App() {
                     <div className="wand-options">
                       <label className="range-control">
                         <span>
-                          Color tolerance <b>{colorTolerance}</b>
+                          Colour tolerance <b>{colorTolerance}</b>
                         </span>
                         <input
-                          aria-label="Color tolerance"
+                          aria-label="Colour tolerance"
                           type="range"
                           min="8"
                           max="100"
@@ -1666,7 +1662,7 @@ function App() {
                         <span>
                           Match across the photo
                           <small>
-                            Include separate patches of the same color.
+                            Include separate patches of the same colour.
                           </small>
                         </span>
                       </label>
@@ -1779,12 +1775,12 @@ function App() {
             >
               <div className="section-heading">
                 <div>
-                  <h2>Find their next color</h2>
+                  <h2>Shade library</h2>
                   <p>
                     {drawing
-                      ? "Finish your surface before applying colors."
+                      ? "Finish your surface before applying colours."
                       : selected
-                        ? "Tap a shade to see it on the photo."
+                        ? "Select a shade to apply it to the active surface."
                         : "Create or select a surface to start painting."}
                   </p>
                 </div>
@@ -1826,7 +1822,7 @@ function App() {
               <label className="search-box">
                 <Search size={18} />
                 <input
-                  aria-label="Search colors"
+                  aria-label="Search colours"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search shade name or code"
@@ -1842,7 +1838,7 @@ function App() {
               </label>
               <div className="palette-filters">
                 <select
-                  aria-label="Color family"
+                  aria-label="Colour family"
                   value={family}
                   onChange={(e) => setFamily(e.target.value)}
                 >
@@ -1884,51 +1880,60 @@ function App() {
                       c.colorCode && <Check size={15} />}
                   </button>
                 ))}
+                {palette.length > visibleCount && (
+                  <button
+                    className="text-button full-width more-shades"
+                    onClick={() => setVisibleCount((v) => v + 64)}
+                  >
+                    Show more shades
+                  </button>
+                )}
                 {!palette.length && (
                   <div className="no-results">
                     <Search size={22} />
                     <b>No matching shades</b>
-                    <p>Try another name, code or color family.</p>
+                    <p>Try another name, code or colour family.</p>
                   </div>
                 )}
               </div>
-              {palette.length > visibleCount && (
-                <button
-                  className="text-button full-width"
-                  onClick={() => setVisibleCount((v) => v + 64)}
-                >
-                  Show more shades
-                </button>
-              )}
               {selected?.color && !drawing && (
-                <div className="paint-settings">
-                  <label className="range-control">
-                    <span>
-                      Paint coverage{" "}
-                      <b>{Math.round(selected.opacity * 100)}%</b>
-                    </span>
-                    <input
-                      aria-label="Paint coverage"
-                      type="range"
-                      min="25"
-                      max="100"
-                      value={Math.round(selected.opacity * 100)}
-                      onChange={(e) => setOpacity(Number(e.target.value) / 100)}
-                      onPointerUp={() => {
-                        opacityHistory.current = false;
-                      }}
-                      onKeyUp={() => {
-                        opacityHistory.current = false;
-                      }}
-                      onBlur={() => {
-                        opacityHistory.current = false;
-                      }}
-                    />
-                  </label>
-                  <button className="text-button" onClick={clearPaint}>
-                    <X size={15} /> Remove paint
-                  </button>
-                </div>
+                <details className="paint-settings">
+                  <summary>
+                    Paint settings{" "}
+                    <span>{Math.round(selected.opacity * 100)}% coverage</span>
+                    <ChevronDown size={16} />
+                  </summary>
+                  <div className="paint-settings-content">
+                    <label className="range-control">
+                      <span>
+                        Paint coverage{" "}
+                        <b>{Math.round(selected.opacity * 100)}%</b>
+                      </span>
+                      <input
+                        aria-label="Paint coverage"
+                        type="range"
+                        min="25"
+                        max="100"
+                        value={Math.round(selected.opacity * 100)}
+                        onChange={(e) =>
+                          setOpacity(Number(e.target.value) / 100)
+                        }
+                        onPointerUp={() => {
+                          opacityHistory.current = false;
+                        }}
+                        onKeyUp={() => {
+                          opacityHistory.current = false;
+                        }}
+                        onBlur={() => {
+                          opacityHistory.current = false;
+                        }}
+                      />
+                    </label>
+                    <button className="text-button" onClick={clearPaint}>
+                      <X size={15} /> Remove paint
+                    </button>
+                  </div>
+                </details>
               )}
               {(!selected || drawing) && (
                 <button
@@ -1945,14 +1950,14 @@ function App() {
             <span>
               {image
                 ? `${saveStatus}. Finished surfaces are saved in this browser; unfinished outlines are not.`
-                : "Your current project saves automatically in this browser."}
+                : "Local autosave · Photographs stay on this device."}
             </span>
           </div>
         </aside>
       </main>
       <footer className="footer">
         <span>
-          huehouse <span> / </span> Paint color studio
+          Visualizer <span> / </span> Colour studio
         </span>
       </footer>
       <dialog

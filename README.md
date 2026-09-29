@@ -1,4 +1,4 @@
-# huehouse · Paint color studio
+# Visualizer · Colour studio
 
 A browser-based paint visualizer for trying shades on a customer's room or house photo. Photo processing stays on the device; no AI or external image service is used.
 

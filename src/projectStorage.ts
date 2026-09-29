@@ -30,6 +30,7 @@ let database: Promise<IDBDatabase> | undefined;
 function openDatabase() {
   if (!database) {
     database = new Promise<IDBDatabase>((resolve, reject) => {
+      // Keep the existing database name so the Visualizer rename preserves saved projects.
       const request = indexedDB.open("huehouse-workspace", 1);
       request.onupgradeneeded = () =>
         request.result.createObjectStore("projects");
@@ -39,7 +40,7 @@ function openDatabase() {
       };
       request.onblocked = () => {
         database = undefined;
-        reject(new Error("Close other huehouse tabs to enable saving."));
+        reject(new Error("Close other Visualizer tabs to enable saving."));
       };
       request.onsuccess = () => {
         const db = request.result;
