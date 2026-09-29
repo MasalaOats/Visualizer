@@ -13,6 +13,7 @@ import {
   makePaintLayer,
   makePath,
   paintKey,
+  paintLighting,
   paintMaskBrush,
 } from "../src/editor";
 import type { Point, Selection } from "../src/editor";
@@ -155,6 +156,144 @@ async function run() {
       restored.mergedFrom?.length === 2 &&
       restored.mergedFrom[1].holes.length === 1,
     "Persistence retains cutouts and originals needed to split merged surfaces",
+  );
+
+  // One selection crosses a bright front face and a shaded side face.
+  const walls = document.createElement("canvas");
+  walls.width = 320;
+  walls.height = 160;
+  const wallContext = walls.getContext("2d")!;
+  wallContext.fillStyle = "rgb(200,200,200)";
+  wallContext.fillRect(0, 0, 160, 160);
+  wallContext.fillStyle = "rgb(80,80,80)";
+  wallContext.fillRect(160, 0, 160, 160);
+  wallContext.fillStyle = "rgb(180,180,180)";
+  wallContext.fillRect(40, 0, 10, 160);
+  wallContext.fillStyle = "rgb(35,35,35)";
+  wallContext.fillRect(156, 0, 4, 160);
+  const wallPhoto = new Image();
+  wallPhoto.src = walls.toDataURL();
+  await wallPhoto.decode();
+  const wallPoints = [
+    { x: 0, y: 0 },
+    { x: 320, y: 0 },
+    { x: 320, y: 160 },
+    { x: 0, y: 160 },
+  ];
+  const wallSelection: Selection = {
+    ...selection,
+    opacity: 1,
+    color: "rgb(180,120,60)",
+    shapes: [
+      { points: wallPoints, path: makePath(wallPoints), tool: "polygon" },
+    ],
+  };
+  const sample = (s: Selection, x: number) => {
+    const result = makePaintLayer(wallPhoto, s);
+    return result.canvas
+      .getContext("2d")!
+      .getImageData(x - result.left, 80 - result.top, 1, 1).data;
+  };
+  const front = sample(wallSelection, 80),
+    side = sample(wallSelection, 240);
+  assert(
+    front[0] - side[0] > 60 && front[3] === 255 && side[3] === 255,
+    "Opaque paint retains a visible difference between lit and shaded wall faces",
+  );
+  assert(
+    sample(wallSelection, 158)[0] < side[0] &&
+      sample(wallSelection, 45)[0] < front[0],
+    "Corner shadows and subtle texture survive repainting",
+  );
+  const flat = { ...wallSelection, lighting: 0 };
+  assert(
+    sample(flat, 80).join() === "180,120,60,255" &&
+      sample(flat, 240).join() === "180,120,60,255",
+    "Zero detail produces exact flat paint regardless of source shadows",
+  );
+  assert(
+    sample({ ...flat, brightness: -25 }, 80)[0] === 135 &&
+      sample({ ...flat, brightness: 20 }, 80)[0] === 216,
+    "Manual face brightness adjusts flat paint independently of coverage",
+  );
+  for (const color of ["rgb(250,250,245)", "rgb(20,25,30)"]) {
+    assert(
+      sample({ ...wallSelection, color }, 80)[0] >
+        sample({ ...wallSelection, color }, 240)[0],
+      `Light and dark paint retain wall depth: ${color}`,
+    );
+  }
+  const darkPoints = [
+    { x: 180, y: 0 },
+    { x: 320, y: 0 },
+    { x: 320, y: 160 },
+    { x: 180, y: 160 },
+  ];
+  const darkWall = {
+    ...wallSelection,
+    shapes: [
+      {
+        points: darkPoints,
+        path: makePath(darkPoints),
+        tool: "polygon" as const,
+      },
+    ],
+  };
+  assert(
+    sample(darkWall, 240).join() === "180,120,60,255",
+    "A uniformly dark old finish does not force the new shade to stay dark",
+  );
+  const cutoutPoints = [
+    { x: 0, y: 0 },
+    { x: 180, y: 0 },
+    { x: 180, y: 160 },
+    { x: 0, y: 160 },
+  ];
+  const cutoutWall = {
+    ...wallSelection,
+    holes: [
+      {
+        points: cutoutPoints,
+        path: makePath(cutoutPoints),
+        tool: "polygon" as const,
+      },
+    ],
+  };
+  assert(
+    sample(cutoutWall, 240).join() === sample(darkWall, 240).join() &&
+      sample(cutoutWall, 80)[3] === 0,
+    "Excluded pixels stay transparent and do not bias surface lighting",
+  );
+  wallContext.fillStyle = "rgb(255,0,0)";
+  wallContext.fillRect(0, 0, 320, 160);
+  wallPhoto.src = walls.toDataURL();
+  await wallPhoto.decode();
+  const blue = sample({ ...wallSelection, color: "rgb(0,100,200)" }, 80);
+  assert(
+    blue[0] === 0 && blue[1] === 100 && blue[2] === 200 && blue[3] === 255,
+    "Source paint hue does not bleed into the opaque replacement colour",
+  );
+  const litSettings = { ...selection, lighting: 0.4, brightness: -22 };
+  const savedLighting = restoreSelection(
+    structuredClone(
+      storeSelection({ ...litSettings, mergedFrom: [litSettings] }),
+    ),
+  );
+  assert(
+    savedLighting.lighting === 0.4 &&
+      savedLighting.brightness === -22 &&
+      savedLighting.mergedFrom?.[0].brightness === -22,
+    "Recovery and merged originals preserve surface lighting settings",
+  );
+  assert(
+    paintLighting(selection).lighting === 0.85 &&
+      paintLighting(selection).brightness === 0,
+    "Existing saved surfaces receive natural lighting defaults",
+  );
+  assert(
+    paintKey(selection) !== paintKey({ ...selection, lighting: 0 }) &&
+      paintKey(selection) !== paintKey({ ...selection, brightness: -20 }),
+    "Lighting and brightness changes invalidate cached paint",
   );
 
   for (const limit of [STANDARD_UNDO_LIMIT, EXTENDED_UNDO_LIMIT]) {

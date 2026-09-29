@@ -29,6 +29,10 @@ export type Selection = {
   colorName?: string;
   colorCode?: string;
   opacity: number;
+  /** 0 = flat paint, 1 = full photo shading. Missing values use the default. */
+  lighting?: number;
+  /** Per-face brightness adjustment in percent (-40 to 40). */
+  brightness?: number;
   mergedFrom?: Selection[];
 };
 export type Color = {
@@ -464,6 +468,22 @@ export function makePath(points: Point[], close = true) {
   return path;
 }
 
+export const DEFAULT_LIGHTING = 0.85;
+
+// Brightness is a manual wall-face adjustment; it does not infer 3D geometry.
+export function paintLighting(selection: Selection) {
+  const lighting = selection.lighting ?? DEFAULT_LIGHTING;
+  const brightness = selection.brightness ?? 0;
+  return {
+    lighting: Number.isFinite(lighting)
+      ? Math.max(0, Math.min(1, lighting))
+      : DEFAULT_LIGHTING,
+    brightness: Number.isFinite(brightness)
+      ? Math.max(-40, Math.min(40, brightness))
+      : 0,
+  };
+}
+
 export function makePaintLayer(image: HTMLImageElement, selection: Selection) {
   const allShapes = [...selection.shapes, ...selection.holes];
   if (!allShapes.length || !selection.color)
@@ -532,17 +552,50 @@ export function makePaintLayer(image: HTMLImageElement, selection: Selection) {
     ?.match(/\d+(?:\.\d+)?/g)
     ?.slice(0, 3)
     .map(Number) ?? [128, 128, 128];
+  const { lighting, brightness } = paintLighting(selection);
+  const luminance = (i: number) =>
+    0.2126 * pixels.data[i] +
+    0.7152 * pixels.data[i + 1] +
+    0.0722 * pixels.data[i + 2];
+  // Estimate a lit patch from selected pixels only. Normalising against it
+  // removes the old paint's overall darkness while retaining local shadows,
+  // ledges and texture. Holes/background must not influence this reference.
+  const histogram = new Float64Array(256);
+  const lightTotals = new Float64Array(256);
+  let weight = 0;
+  if (lighting > 0) {
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      const alpha = maskPixels[i + 3] / 255;
+      if (!alpha) continue;
+      const light = luminance(i);
+      const bin = Math.round(light);
+      histogram[bin] += alpha;
+      lightTotals[bin] += light * alpha;
+      weight += alpha;
+    }
+  }
+  let reference = 255;
+  if (weight > 0) {
+    let cumulative = 0;
+    for (let level = 0; level < histogram.length; level++) {
+      cumulative += histogram[level];
+      if (cumulative >= weight * 0.8) {
+        reference = lightTotals[level] / histogram[level];
+        break;
+      }
+    }
+  }
   const output = new Uint8ClampedArray(pixels.data.length);
   for (let i = 0; i < pixels.data.length; i += 4) {
     const coverage = (maskPixels[i + 3] / 255) * selection.opacity;
     if (!coverage) continue;
-    const light =
-      (0.2126 * pixels.data[i] +
-        0.7152 * pixels.data[i + 1] +
-        0.0722 * pixels.data[i + 2]) /
-      255;
-    // Keep the new paint opaque: only 4% of the original luminance remains as subtle surface lighting.
-    const shade = 0.96 + light * 0.04;
+    // Keep source hue out of opaque paint. Only scalar light variation is
+    // transferred; the offset avoids amplifying noise in very dark photos.
+    const relativeLight = Math.max(
+      0.15,
+      Math.min(1.15, (luminance(i) + 16) / (reference + 16)),
+    );
+    const shade = (1 + lighting * (relativeLight - 1)) * (1 + brightness / 100);
     output[i] = Math.min(255, rgb[0] * shade);
     output[i + 1] = Math.min(255, rgb[1] * shade);
     output[i + 2] = Math.min(255, rgb[2] * shade);
@@ -591,6 +644,7 @@ export function paintKey(selection: Selection) {
   return JSON.stringify([
     selection.color,
     selection.opacity,
+    paintLighting(selection),
     selection.shapes.map(key),
     selection.holes.map(key),
   ]);

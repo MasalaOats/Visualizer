@@ -43,6 +43,7 @@ import {
   makePaintLayer,
   makePath,
   paintKey,
+  paintLighting,
   paintMaskBrush,
   tintMask,
 } from "./editor";
@@ -1148,6 +1149,17 @@ function App() {
       ),
     );
   };
+  const setSurfaceLighting = (
+    field: "lighting" | "brightness",
+    value: number,
+  ) => {
+    if (!selected || paintLighting(selected)[field] === value) return;
+    adjust(field === "lighting" ? "Surface detail" : "Wall brightness", () =>
+      updateSelections((v) =>
+        v.map((s) => (s.id === selected.id ? { ...s, [field]: value } : s)),
+      ),
+    );
+  };
   const remove = () => {
     if (!selected) return;
     beginHistory("Remove surface");
@@ -1186,6 +1198,7 @@ function App() {
       colorName: active.colorName,
       colorCode: active.colorCode,
       opacity: active.opacity,
+      ...paintLighting(active),
       mergedFrom: parts,
     };
     updateSelections((v) => [...v.filter((s) => !ids.has(s.id)), merged]);
@@ -2070,11 +2083,78 @@ function App() {
               {selected?.color && !drawing && (
                 <details className="paint-settings">
                   <summary>
-                    Paint settings{" "}
-                    <span>{Math.round(selected.opacity * 100)}% coverage</span>
+                    Paint & lighting{" "}
+                    <span>
+                      {paintLighting(selected).lighting === 0
+                        ? "Flat"
+                        : "Natural"}
+                    </span>
                     <ChevronDown size={16} />
                   </summary>
                   <div className="paint-settings-content">
+                    <label className="range-control">
+                      <span>
+                        Surface detail{" "}
+                        <b>
+                          {Math.round(paintLighting(selected).lighting * 100)}%
+                        </b>
+                      </span>
+                      <input
+                        aria-label="Surface detail"
+                        aria-describedby="surface-detail-hint"
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={Math.round(
+                          paintLighting(selected).lighting * 100,
+                        )}
+                        onChange={(e) =>
+                          setSurfaceLighting(
+                            "lighting",
+                            Number(e.target.value) / 100,
+                          )
+                        }
+                        onPointerUp={endAdjustment}
+                        onPointerCancel={endAdjustment}
+                        onKeyUp={endAdjustment}
+                        onBlur={endAdjustment}
+                      />
+                    </label>
+                    <p id="surface-detail-hint" className="helper-text">
+                      0% gives flat paint. Increase to keep the photo’s shadows
+                      and texture.
+                    </p>
+                    <label className="range-control">
+                      <span>
+                        Wall brightness{" "}
+                        <b>
+                          {paintLighting(selected).brightness > 0 ? "+" : ""}
+                          {paintLighting(selected).brightness}%
+                        </b>
+                      </span>
+                      <input
+                        aria-label="Wall brightness"
+                        aria-describedby="wall-brightness-hint"
+                        type="range"
+                        min="-40"
+                        max="40"
+                        value={paintLighting(selected).brightness}
+                        onChange={(e) =>
+                          setSurfaceLighting(
+                            "brightness",
+                            Number(e.target.value),
+                          )
+                        }
+                        onPointerUp={endAdjustment}
+                        onPointerCancel={endAdjustment}
+                        onKeyUp={endAdjustment}
+                        onBlur={endAdjustment}
+                      />
+                    </label>
+                    <p id="wall-brightness-hint" className="helper-text">
+                      Trace each wall face separately. Darken the shaded side to
+                      show the corner.
+                    </p>
                     <label className="range-control">
                       <span>
                         Paint coverage{" "}

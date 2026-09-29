@@ -19,6 +19,14 @@ Open `http://localhost:5173`. Build production assets with `npm run build`; depl
 4. Edit traced points by dragging them. Use **Curves** (or Shift-drag) for curved edges and **Remove last point** to correct tracing. Use **Edit surface** to restore or erase pixels in a saved color selection.
 5. Hold **Original** to compare, then export PNG or JPG. Use **Pan** or Space-drag to move the photo.
 
+## Wall depth and angled faces
+
+Paint keeps local shadows, ledges and texture from the original photograph at full coverage. In **Colours → Paint & lighting**, **Surface detail** controls the effect (85% by default); set it to **0%** for a flat finish. **Wall brightness** adjusts the selected face from −40% to +40% without changing its shade code. Both controls support undo/redo, local recovery and export. Existing saved surfaces use the new defaults.
+
+For an angled house, trace the front and side as separate surfaces, apply the same shade, and reduce the shaded side’s brightness if needed. Point tracing already supports triangles and perspective outlines. Merging adopts the active surface’s lighting settings; splitting restores the originals.
+
+Use the original photo: details erased by an earlier solid-colour export cannot be recovered. This is non-AI shading from photo pixels, not geometry detection; old stains/patterns can also appear as detail, so lower Surface detail when needed. Preview colours still need checking against a physical shade card.
+
 ## Undo / redo configuration
 
 The toolbar and Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y share one history for editor actions: points, curves, freehand, mask strokes/traces, tool settings, creating/finishing/cancelling surfaces, paint/coverage, rename/remove/merge/split, zoom/pan, and importing/replacing photos. One drag, brush stroke or slider interaction counts as one action. A new edit after undo discards redo. Navigation, searches, typing into text fields, comparison and downloads do not consume editor history.
@@ -41,6 +49,6 @@ npx tsc -b
 npm run build
 ```
 
-With the development server running, open `http://localhost:5173/tests/editor-regressions.html` for browser-native rendering and serialization checks. These cover curved paint bounds, curve-aware cache keys, mask draft isolation, traced mask additions, persistence of paths/pixels/cutouts/merged originals, 5/20-step history limits, redo branching, and history snapshot isolation. The test page does not modify the saved project. It is not included in the production build.
+With the development server running, open `http://localhost:5173/tests/editor-regressions.html` for browser-native rendering and serialization checks. These cover curved paint bounds, curve-aware cache keys, mask draft isolation, traced mask additions, persistence of paths/pixels/cutouts/merged originals, 5/20-step history limits, redo branching, history snapshot isolation, opaque shading contrast, flat mode, per-face brightness, and lighting persistence. The test page does not modify the saved project. It is not included in the production build.
 
 For UI smoke testing: upload → trace → undo a point → finish → choose a color → edit/cancel/save a mask → undo/redo → reload → export both formats. Check phone and desktop layouts. `src/editor.ts` contains rendering/geometry; `src/projectStorage.ts` handles local persistence; `src/App.tsx` connects the editor controls.
