@@ -170,3 +170,17 @@ export async function saveProject(
     transaction.objectStore("projects").put(project, "current");
   });
 }
+
+export async function clearProject() {
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction("projects", "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () =>
+      reject(
+        transaction.error ?? new Error("Clearing the project was interrupted."),
+      );
+    transaction.objectStore("projects").delete("current");
+  });
+}

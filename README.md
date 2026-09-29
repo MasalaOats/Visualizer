@@ -16,10 +16,16 @@ Open `http://localhost:5173`. Build production assets with `npm run build`; depl
 1. Upload a JPG, PNG or WEBP (up to 30 MB and 24 megapixels).
 2. Create a surface with point tracing, freehand, or similar-color selection. The last chosen drawing tool is remembered.
 3. Finish the surface. It is named automatically and selected for painting; tap any color to apply it immediately.
-4. Edit traced points by dragging them. Use **Curves** (or Shift-drag) for curved edges and **Undo last point** to correct tracing. Use **Edit surface** to restore or erase pixels in a saved color selection.
+4. Edit traced points by dragging them. Use **Curves** (or Shift-drag) for curved edges and **Remove last point** to correct tracing. Use **Edit surface** to restore or erase pixels in a saved color selection.
 5. Hold **Original** to compare, then export PNG or JPG. Use **Pan** or Space-drag to move the photo.
 
-Completed surface changes support undo/redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y). While drawing, Ctrl/Cmd+Z removes the last tracing point. Select multiple surfaces with the checkboxes to merge; merged surfaces can be split again.
+## Undo / redo configuration
+
+The toolbar and Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl+Y share one history for editor actions: points, curves, freehand, mask strokes/traces, tool settings, creating/finishing/cancelling surfaces, paint/coverage, rename/remove/merge/split, zoom/pan, and importing/replacing photos. One drag, brush stroke or slider interaction counts as one action. A new edit after undo discards redo. Navigation, searches, typing into text fields, comparison and downloads do not consume editor history.
+
+**Five undo steps are enabled.** In `src/historyConfig.ts`, change `ENABLE_EXTENDED_UNDO` from `false` to `true` to enable **20 steps**. The extra capacity is implemented and tested. Set it back to `false` for five steps. Reload/rebuild after changing this code switch. It does not implement billing or paid-plan enforcement.
+
+History is per session and resets on reload; it is separate from local project recovery. **Remove last point** is itself an undoable edit. Undoing a finished surface restores its editable draft. Undoing the first photo import returns to a blank workspace and clears that local autosave; Redo restores the photo during the session. Surface checkboxes still support merge/split.
 
 ## Local recovery
 
@@ -35,6 +41,6 @@ npx tsc -b
 npm run build
 ```
 
-With the development server running, open `http://localhost:5173/tests/editor-regressions.html` for browser-native rendering and serialization checks. These cover curved paint bounds, curve-aware cache keys, mask draft isolation, traced mask additions, and persistence of paths, pixels, cutouts and merged originals. The test page does not modify the saved project. It is not included in the production build.
+With the development server running, open `http://localhost:5173/tests/editor-regressions.html` for browser-native rendering and serialization checks. These cover curved paint bounds, curve-aware cache keys, mask draft isolation, traced mask additions, persistence of paths/pixels/cutouts/merged originals, 5/20-step history limits, redo branching, and history snapshot isolation. The test page does not modify the saved project. It is not included in the production build.
 
 For UI smoke testing: upload → trace → undo a point → finish → choose a color → edit/cancel/save a mask → undo/redo → reload → export both formats. Check phone and desktop layouts. `src/editor.ts` contains rendering/geometry; `src/projectStorage.ts` handles local persistence; `src/App.tsx` connects the editor controls.

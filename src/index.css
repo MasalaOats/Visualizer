@@ -1729,3 +1729,46 @@ small {
     font-size: 30px;
   }
 }
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+}
+.preview-actions .history-controls {
+  align-items: center;
+  gap: 4px;
+}
+.preview-actions .history-controls button {
+  min-height: 36px;
+  min-width: 36px;
+}
+.history-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+}
+@media (max-width: 1100px) and (min-width: 801px) {
+  .preview-header {
+    flex-wrap: wrap;
+  }
+  .preview-actions {
+    margin-left: auto;
+  }
+}
+@media (max-width: 800px) {
+  .preview-header {
+    flex-wrap: wrap;
+  }
+  .preview-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .preview-actions .history-controls button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

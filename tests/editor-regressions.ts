@@ -1,3 +1,12 @@
+import { History } from "../src/history";
+import {
+  ENABLE_EXTENDED_UNDO,
+  STANDARD_UNDO_LIMIT,
+  EXTENDED_UNDO_LIMIT,
+  UNDO_LIMIT,
+} from "../src/historyConfig";
+import { copySnapshot, sameSnapshot } from "../src/editorSnapshot";
+import type { EditorSnapshot } from "../src/editorSnapshot";
 import {
   cloneMask,
   editMaskWithPath,
@@ -148,6 +157,90 @@ async function run() {
     "Persistence retains cutouts and originals needed to split merged surfaces",
   );
 
+  for (const limit of [STANDARD_UNDO_LIMIT, EXTENDED_UNDO_LIMIT]) {
+    const history = new History<number>(limit);
+    let current = 0;
+    for (let i = 1; i <= limit + 3; i++) {
+      history.record(current, i, "Edit");
+      current = i;
+    }
+    assert(
+      history.past.length === limit,
+      `${limit}-step history drops older entries`,
+    );
+    for (let i = 0; i < limit; i++) current = history.undo(current)!;
+    assert(
+      current === 3 && history.undo(current) === undefined,
+      `${limit}-step undo stops exactly at its limit`,
+    );
+    for (let i = 0; i < limit; i++) current = history.redo(current)!;
+    assert(
+      current === limit + 3 && history.redo(current) === undefined,
+      `${limit}-step redo restores every retained action`,
+    );
+    current = history.undo(current)!;
+    history.record(current, current, "No change");
+    assert(history.future.length === 1, `${limit}-step no-op preserves redo`);
+    history.record(current, 999, "New branch");
+    assert(
+      history.future.length === 0 && history.redo(999) === undefined,
+      `${limit}-step new edit discards redo branch`,
+    );
+  }
+  assert(
+    UNDO_LIMIT ===
+      (ENABLE_EXTENDED_UNDO ? EXTENDED_UNDO_LIMIT : STANDARD_UNDO_LIMIT),
+    "History configuration selects the declared limit",
+  );
+  const state: EditorSnapshot = {
+    photo: null,
+    image: photo,
+    edgeMap: null,
+    colorMap: null,
+    photoName: "fixture",
+    selections: [selection],
+    points,
+    maskShape: mask,
+    drawing: true,
+    tool: "wand",
+    lastTool: "wand",
+    edgeSnap: false,
+    colorTolerance: 34,
+    colorScope: "connected",
+    colorSeed: null,
+    maskEditMode: "erase",
+    brushSize: 24,
+    areaMode: "new",
+    zoom: 1,
+    pan: { x: 0, y: 0 },
+    panMode: false,
+    curveMode: false,
+    color: {
+      colorName: "Test",
+      colorCode: "T",
+      colorTone: "Light",
+      colorValue: "rgb(200,100,50)",
+    },
+    selectedId: 1,
+    multiSelectedIds: [],
+    panel: "surfaces",
+  };
+  const snapshot = copySnapshot(state);
+  paintMaskBrush(mask, { x: 150, y: 150 }, "erase", 20, 400, 400);
+  assert(
+    snapshot.maskShape!.maskCanvas.getContext("2d")!.getImageData(50, 50, 1, 1)
+      .data[3] === 255,
+    "History snapshot isolates a mutable brush draft",
+  );
+  assert(
+    sameSnapshot(snapshot, { ...snapshot, selectedId: 2, panel: "colors" }),
+    "Browsing panels and selecting surfaces does not consume undo",
+  );
+  assert(
+    !sameSnapshot(snapshot, { ...snapshot, zoom: 2 }) &&
+      !sameSnapshot(snapshot, { ...snapshot, colorTolerance: 50 }),
+    "View and selection settings count as editable history",
+  );
   document.title = `${results.length} checks passed`;
 }
 run()

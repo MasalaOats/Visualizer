@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -56,7 +57,11 @@ import type {
   SurfacePart,
   Tool,
 } from "./editor";
-import { loadProject, saveProject } from "./projectStorage";
+import { clearProject, loadProject, saveProject } from "./projectStorage";
+import { History } from "./history";
+import { UNDO_LIMIT } from "./historyConfig";
+import { copySnapshot, sameSnapshot } from "./editorSnapshot";
+import type { EditorSnapshot } from "./editorSnapshot";
 
 type CurveDrag = {
   index: number;
@@ -82,10 +87,6 @@ function App() {
   const [image, setImage] = useState<string | null>(null);
   const [selections, setSelections] = useState<Selection[]>([]);
   const selectionsRef = useRef(selections);
-  const selectionHistory = useRef<{
-    past: Selection[][];
-    future: Selection[][];
-  }>({ past: [], future: [] });
   const [points, setPoints] = useState<Point[]>([]);
   const [curveDrag, setCurveDrag] = useState<CurveDrag | null>(null);
   const [maskShape, setMaskShape] = useState<MaskShape | null>(null);
@@ -135,7 +136,14 @@ function App() {
   const imageUrlRef = useRef<string | null>(null);
   const loadGeneration = useRef(0);
   const lastTool = useRef<Tool>("polygon");
-  const opacityHistory = useRef(false);
+  const history = useRef(new History<EditorSnapshot>(UNDO_LIMIT, sameSnapshot));
+  const pendingHistory = useRef<{
+    state: EditorSnapshot;
+    label: string;
+  } | null>(null);
+  const historyGroup = useRef<string | null>(null);
+  const [, refreshHistory] = useState(0);
+  const projectOpened = useRef(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const maskTintRef = useRef<{
     maskId: number;
@@ -153,49 +161,140 @@ function App() {
   );
   const fileRef = useRef<HTMLInputElement>(null);
   const selected = selections.find((item) => item.id === selectedId);
-  const updateSelections = (
-    update: (current: Selection[]) => Selection[],
-    record = true,
-  ) => {
-    const previous = selectionsRef.current,
-      next = update(previous);
-    if (next === previous) return;
-    if (record) {
-      selectionHistory.current.past.push(previous);
-      if (selectionHistory.current.past.length > 60)
-        selectionHistory.current.past.shift();
+  const snapshotRef = useRef<EditorSnapshot>(null!);
+  snapshotRef.current = {
+    photo: photoRef.current,
+    image: imageRef.current,
+    edgeMap: edgeMapRef.current,
+    colorMap: colorMapRef.current,
+    photoName,
+    selections,
+    points,
+    maskShape,
+    drawing,
+    tool,
+    lastTool: lastTool.current,
+    edgeSnap,
+    colorTolerance,
+    colorScope,
+    colorSeed,
+    maskEditMode,
+    brushSize,
+    areaMode,
+    zoom,
+    pan,
+    panMode,
+    curveMode,
+    color,
+    selectedId,
+    multiSelectedIds,
+    panel,
+  };
+  const flushHistory = () => {
+    const pending = pendingHistory.current;
+    if (!pending) return;
+    pendingHistory.current = null;
+    if (
+      history.current.record(pending.state, snapshotRef.current, pending.label)
+    )
+      refreshHistory((v) => v + 1);
+  };
+  const beginHistory = (label: string) => {
+    flushHistory();
+    historyGroup.current = null;
+    pendingHistory.current = {
+      state: copySnapshot(snapshotRef.current),
+      label,
+    };
+  };
+  const change = (label: string, action: () => void) => {
+    beginHistory(label);
+    action();
+  };
+  const beginGesture = (label: string) => {
+    beginHistory(label);
+    historyGroup.current = "pointer";
+  };
+  const adjust = (label: string, action: () => void) => {
+    if (historyGroup.current !== label) {
+      beginHistory(label);
+      historyGroup.current = label;
     }
-    selectionHistory.current.future = [];
+    action();
+  };
+  const endAdjustment = () => {
+    historyGroup.current = null;
+    refreshHistory((v) => v + 1);
+  };
+  useLayoutEffect(() => {
+    if (!historyGroup.current) flushHistory();
+  });
+
+  const restoreSnapshot = (state: EditorSnapshot) => {
+    pendingHistory.current = null;
+    historyGroup.current = null;
+    if (imageRef.current !== state.image) {
+      if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+      const url = state.photo ? URL.createObjectURL(state.photo) : null;
+      imageUrlRef.current = url;
+      imageRef.current = state.image;
+      photoRef.current = state.photo;
+      edgeMapRef.current = state.edgeMap;
+      colorMapRef.current = state.colorMap;
+      setImage(url);
+      const canvas = canvasRef.current!;
+      canvas.width = state.image?.naturalWidth ?? 300;
+      canvas.height = state.image?.naturalHeight ?? 150;
+    }
+    paintCache.current.clear();
+    maskTintRef.current = null;
+    selectionsRef.current = state.selections;
+    lastTool.current = state.lastTool;
+    setPhotoName(state.photoName);
+    setSelections(state.selections);
+    setPoints(state.points);
+    setMaskShape(state.maskShape);
+    setDrawing(state.drawing);
+    setTool(state.tool);
+    setEdgeSnap(state.edgeSnap);
+    setColorTolerance(state.colorTolerance);
+    setColorScope(state.colorScope);
+    setColorSeed(state.colorSeed);
+    setMaskEditMode(state.maskEditMode);
+    setBrushSize(state.brushSize);
+    setAreaMode(state.areaMode);
+    setZoom(state.zoom);
+    setPan(state.pan);
+    setPanMode(state.panMode);
+    setCurveMode(state.curveMode);
+    setColor(state.color);
+    setSelectedId(state.selectedId);
+    setMultiSelectedIds(state.multiSelectedIds);
+    setPanel(state.panel);
+    setGesture(false);
+    setCurveDrag(null);
+    setPanStart(null);
+    setNaming(false);
+    setOriginal(false);
+    setToast("");
+    refreshHistory((v) => v + 1);
+  };
+  const undo = () => {
+    if (loading || !ready) return;
+    flushHistory();
+    const previous = history.current.undo(copySnapshot(snapshotRef.current));
+    if (previous) restoreSnapshot(previous);
+  };
+  const redo = () => {
+    if (loading || !ready) return;
+    flushHistory();
+    const next = history.current.redo(copySnapshot(snapshotRef.current));
+    if (next) restoreSnapshot(next);
+  };
+  const updateSelections = (update: (current: Selection[]) => Selection[]) => {
+    const next = update(selectionsRef.current);
     selectionsRef.current = next;
     setSelections(next);
-  };
-  const undoSurfaces = () => {
-    const history = selectionHistory.current;
-    if (!history.past.length) return;
-    const previous = history.past.pop()!;
-    history.future.push(selectionsRef.current);
-    selectionsRef.current = previous;
-    setSelections(previous);
-    setSelectedId((id) =>
-      id !== null && previous.some((s) => s.id === id)
-        ? id
-        : (previous[previous.length - 1]?.id ?? null),
-    );
-    setMultiSelectedIds([]);
-  };
-  const redoSurfaces = () => {
-    const history = selectionHistory.current;
-    if (!history.future.length) return;
-    const next = history.future.pop()!;
-    history.past.push(selectionsRef.current);
-    selectionsRef.current = next;
-    setSelections(next);
-    setSelectedId((id) =>
-      id !== null && next.some((s) => s.id === id)
-        ? id
-        : (next[next.length - 1]?.id ?? null),
-    );
-    setMultiSelectedIds([]);
   };
   const palette = useMemo(
     () =>
@@ -209,26 +308,27 @@ function App() {
     [family, query],
   );
   useEffect(() => setVisibleCount(64), [family, query]);
-  const shortcutRef = useRef({ drawing, undoSurfaces, redoSurfaces });
-  shortcutRef.current = { drawing, undoSurfaces, redoSurfaces };
+  const shortcutRef = useRef({ undo, redo });
+  shortcutRef.current = { undo, redo };
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement,
         typing =
-          ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName) ||
-          target?.isContentEditable;
+          target instanceof HTMLInputElement
+            ? !["range", "checkbox", "radio", "button", "submit"].includes(
+                target.type,
+              )
+            : target?.tagName === "TEXTAREA" || target?.isContentEditable;
       if ((event.ctrlKey || event.metaKey) && !typing) {
         if (event.key.toLowerCase() === "z") {
           event.preventDefault();
-          if (shortcutRef.current.drawing) {
-            if (!event.shiftKey) setPoints((v) => v.slice(0, -1));
-          } else if (event.shiftKey) shortcutRef.current.redoSurfaces();
-          else shortcutRef.current.undoSurfaces();
+          if (event.shiftKey) shortcutRef.current.redo();
+          else shortcutRef.current.undo();
           return;
         }
         if (event.key.toLowerCase() === "y") {
           event.preventDefault();
-          if (!shortcutRef.current.drawing) shortcutRef.current.redoSurfaces();
+          shortcutRef.current.redo();
           return;
         }
       }
@@ -405,12 +505,26 @@ function App() {
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
-  useEffect(() => {
-    const map = colorMapRef.current;
-    if (drawing && tool === "wand" && colorSeed && map)
-      setMaskShape(makeColorMask(map, colorSeed, colorTolerance, colorScope));
-  }, [colorSeed, colorTolerance, colorScope, drawing, tool]);
-
+  const selectColorRegion = (
+    seed: Point,
+    tolerance = colorTolerance,
+    scope = colorScope,
+  ) => {
+    if (!colorMapRef.current) return;
+    setColorSeed(seed);
+    setMaskShape(makeColorMask(colorMapRef.current, seed, tolerance, scope));
+  };
+  const changeTolerance = (value: number) =>
+    adjust("Color tolerance", () => {
+      setColorTolerance(value);
+      if (colorSeed && tool === "wand") selectColorRegion(colorSeed, value);
+    });
+  const changeScope = (value: "connected" | "image") =>
+    change("Selection scope", () => {
+      setColorScope(value);
+      if (colorSeed && tool === "wand")
+        selectColorRegion(colorSeed, colorTolerance, value);
+    });
   const installPhoto = useCallback(
     (
       img: HTMLImageElement,
@@ -429,7 +543,7 @@ function App() {
       if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
       imageUrlRef.current = url;
       selectionsRef.current = restored;
-      selectionHistory.current = { past: [], future: [] };
+      projectOpened.current = true;
       setImage(url);
       setSelections(restored);
       setSelectedId(restored[0]?.id ?? null);
@@ -491,12 +605,17 @@ function App() {
   );
 
   useEffect(() => {
-    if (!ready || !image || !photoRef.current) return;
+    if (!ready || (!image && !projectOpened.current)) return;
     let active = true;
     setSaveStatus("Saving…");
-    void saveProject(photoRef.current, photoName, selections, lastTool.current)
+    void (
+      photoRef.current
+        ? saveProject(photoRef.current, photoName, selections, lastTool.current)
+        : clearProject()
+    )
       .then(() => {
-        if (active) setSaveStatus("Saved on this device");
+        if (active)
+          setSaveStatus(image ? "Saved on this device" : "Local workspace");
       })
       .catch(() => {
         if (active) setSaveStatus("Could not save — retry");
@@ -558,6 +677,7 @@ function App() {
         throw new Error(
           "This photo is too large. Resize it below 24 megapixels and try again.",
         );
+      beginHistory("Import photograph");
       installPhoto(img, url, file);
       setPhotoName(file.name);
       setToast("Photograph imported. Define a surface to continue.");
@@ -629,6 +749,7 @@ function App() {
     if (original || loading) return;
     const p = pointFromEvent(e);
     if (spaceHeldRef.current || panMode) {
+      beginGesture("Pan photo");
       e.preventDefault();
       e.currentTarget.setPointerCapture(e.pointerId);
       setPanStart({ x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y });
@@ -653,6 +774,7 @@ function App() {
     }
     if (tool === "wand") {
       if (maskShape && (maskEditMode === "add" || maskEditMode === "erase")) {
+        beginGesture(maskEditMode === "erase" ? "Erase mask" : "Restore mask");
         e.currentTarget.setPointerCapture(e.pointerId);
         setGesture(true);
         setColorSeed(null);
@@ -672,7 +794,8 @@ function App() {
           );
         return;
       }
-      setColorSeed(p);
+      beginHistory("Select color region");
+      selectColorRegion(p);
       setPoints([]);
       return;
     }
@@ -682,6 +805,7 @@ function App() {
       const bending = e.shiftKey || curveMode;
       for (let i = points.length - 1; i >= 0; i--) {
         if (Math.hypot(points[i].x - p.x, points[i].y - p.y) <= hitRadius) {
+          beginGesture(bending ? "Curve point" : "Move point");
           canvas.setPointerCapture(e.pointerId);
           setGesture(true);
           setCurveDrag({
@@ -717,6 +841,7 @@ function App() {
           }
         }
         if (nearest >= 0) {
+          beginGesture("Curve edge");
           canvas.setPointerCapture(e.pointerId);
           setGesture(true);
           setCurveDrag({ index: nearest, start: p, mode: "segment" });
@@ -724,9 +849,11 @@ function App() {
         }
         return;
       }
+      beginHistory("Add point");
       setPoints((v) => [...v, snapToEdge(p)]);
       return;
     }
+    beginGesture("Freehand outline");
     e.currentTarget.setPointerCapture(e.pointerId);
     setGesture(true);
     setPoints([p]);
@@ -835,12 +962,15 @@ function App() {
     setPoints((v) => (tool === "freehand" ? [...v, p] : [v[0], p]));
   };
   const handlePointerUp = () => {
+    if (historyGroup.current === "pointer") historyGroup.current = null;
     setGesture(false);
     setCurveDrag(null);
     setPanStart(null);
   };
   const changeZoom = (next: number) => {
     const value = Math.max(1, Math.min(4, next));
+    if (value === zoom && (value !== 1 || (pan.x === 0 && pan.y === 0))) return;
+    beginHistory(value === 1 ? "Fit photo" : "Zoom photo");
     setZoom(value);
     if (value === 1) setPan({ x: 0, y: 0 });
   };
@@ -883,6 +1013,7 @@ function App() {
     setToast("Surface created. Select a shade to apply.");
   };
   const startDrawing = (mode: "new" | "add" | "subtract") => {
+    beginHistory("Start surface");
     resetDrawing();
     setDrawing(true);
     setAreaMode(mode);
@@ -896,6 +1027,7 @@ function App() {
     }
   };
   const chooseTool = (next: Tool) => {
+    beginHistory("Change drawing tool");
     lastTool.current = next;
     setTool(next);
     setMaskShape(null);
@@ -910,6 +1042,7 @@ function App() {
   const editSurface = () => {
     const shape = selected?.shapes[0];
     if (!selected || !shape || selected.shapes.length !== 1) return;
+    beginHistory("Edit surface");
     resetDrawing();
     setDrawing(true);
     setAreaMode("edit");
@@ -927,6 +1060,7 @@ function App() {
   };
   const finishDrawing = () => {
     if (!canFinish) return;
+    beginHistory("Finish surface");
     if (areaMode === "edit" && selectedId !== null) {
       const shape = makeCurrentShape();
       updateSelections((v) =>
@@ -965,6 +1099,7 @@ function App() {
   };
   const finishMaskTrace = () => {
     if (!maskShape || points.length < 3 || !imageRef.current) return;
+    beginHistory("Apply mask trace");
     const mode = maskEditMode === "trace-erase" ? "erase" : "add";
     const next = editMaskWithPath(
       maskShape,
@@ -989,6 +1124,7 @@ function App() {
     );
   };
   const chooseColor = (next: Color) => {
+    beginHistory("Apply shade");
     setColor(next);
     if (!selected || drawing || selected.colorCode === next.colorCode) return;
     updateSelections((v) =>
@@ -1005,20 +1141,23 @@ function App() {
     );
   };
   const setOpacity = (opacity: number) => {
-    if (!selected) return;
-    updateSelections(
-      (v) => v.map((s) => (s.id === selected.id ? { ...s, opacity } : s)),
-      !opacityHistory.current,
+    if (!selected || selected.opacity === opacity) return;
+    adjust("Paint coverage", () =>
+      updateSelections((v) =>
+        v.map((s) => (s.id === selected.id ? { ...s, opacity } : s)),
+      ),
     );
-    opacityHistory.current = true;
   };
   const remove = () => {
+    if (!selected) return;
+    beginHistory("Remove surface");
     updateSelections((v) => v.filter((s) => s.id !== selectedId));
     if (selectedId !== null) paintCache.current.delete(selectedId);
     setSelectedId(null);
   };
   const clearPaint = () => {
     if (!selected) return;
+    beginHistory("Remove paint");
     updateSelections((v) =>
       v.map((s) =>
         s.id === selected.id
@@ -1035,6 +1174,7 @@ function App() {
       ...multiSelectedIds,
     ]);
     if (ids.size < 2) return;
+    beginHistory("Merge surfaces");
     const parts = selections.filter((s) => ids.has(s.id));
     const active = parts.find((s) => s.id === selectedId) ?? parts[0];
     const merged: Selection = {
@@ -1056,6 +1196,7 @@ function App() {
   };
   const splitSelected = () => {
     if (!selected?.mergedFrom) return;
+    beginHistory("Split surfaces");
     const originals = selected.mergedFrom;
     updateSelections((v) => [
       ...v.filter((s) => s.id !== selected.id),
@@ -1087,6 +1228,7 @@ function App() {
   };
 
   const cancelDrawing = () => {
+    beginHistory("Cancel drawing");
     if (isMaskTrace) {
       setTool("wand");
       setMaskEditMode("select");
@@ -1185,35 +1327,61 @@ function App() {
                 {photoName || "No photograph imported"}
               </span>
             </div>
-            <button
-              className={`compare-button ${original ? "active" : ""}`}
-              disabled={!image || busy}
-              aria-label="Hold to view original"
-              title="Hold to view the original photo"
-              onPointerDown={(e) => {
-                e.currentTarget.setPointerCapture(e.pointerId);
-                setOriginal(true);
-              }}
-              onPointerUp={() => setOriginal(false)}
-              onPointerCancel={() => setOriginal(false)}
-              onLostPointerCapture={() => setOriginal(false)}
-              onKeyDown={(e) => {
-                if (e.key === " " || e.key === "Enter") {
-                  e.preventDefault();
+            <div className="preview-actions">
+              <div
+                className="history-controls"
+                aria-label={`Edit history, maximum ${UNDO_LIMIT} steps`}
+              >
+                <button
+                  aria-label="Undo"
+                  title={`Undo ${history.current.past[history.current.past.length - 1]?.label ?? "edit"} (Ctrl+Z)`}
+                  disabled={busy || !history.current.past.length}
+                  onClick={undo}
+                >
+                  <Undo2 size={17} />
+                </button>
+                <button
+                  aria-label="Redo"
+                  title={`Redo ${history.current.future[history.current.future.length - 1]?.label ?? "edit"} (Ctrl+Shift+Z)`}
+                  disabled={busy || !history.current.future.length}
+                  onClick={redo}
+                >
+                  <Redo2 size={17} />
+                </button>
+                <span className="history-count" title="Available undo steps">
+                  {history.current.past.length}/{UNDO_LIMIT}
+                </span>
+              </div>
+              <button
+                className={`compare-button ${original ? "active" : ""}`}
+                disabled={!image || busy}
+                aria-label="Hold to view original"
+                title="Hold to view the original photo"
+                onPointerDown={(e) => {
+                  e.currentTarget.setPointerCapture(e.pointerId);
                   setOriginal(true);
-                }
-              }}
-              onKeyUp={(e) => {
-                if (e.key === " " || e.key === "Enter") {
-                  e.preventDefault();
-                  setOriginal(false);
-                }
-              }}
-              onBlur={() => setOriginal(false)}
-            >
-              <Eye size={17} />
-              {original ? "Original photo" : "Hold for original"}
-            </button>
+                }}
+                onPointerUp={() => setOriginal(false)}
+                onPointerCancel={() => setOriginal(false)}
+                onLostPointerCapture={() => setOriginal(false)}
+                onKeyDown={(e) => {
+                  if (e.key === " " || e.key === "Enter") {
+                    e.preventDefault();
+                    setOriginal(true);
+                  }
+                }}
+                onKeyUp={(e) => {
+                  if (e.key === " " || e.key === "Enter") {
+                    e.preventDefault();
+                    setOriginal(false);
+                  }
+                }}
+                onBlur={() => setOriginal(false)}
+              >
+                <Eye size={17} />
+                {original ? "Original photo" : "Hold for original"}
+              </button>
+            </div>
           </div>
           <div className={`canvas-card ${image ? "has-image" : ""}`}>
             {!image && (
@@ -1296,7 +1464,7 @@ function App() {
                 aria-pressed={panMode}
                 className={panMode ? "active" : ""}
                 disabled={!image}
-                onClick={() => setPanMode((v) => !v)}
+                onClick={() => change("Pan mode", () => setPanMode((v) => !v))}
               >
                 <Hand size={17} /> Pan
               </button>
@@ -1391,26 +1559,6 @@ function App() {
                       : "Define walls, trims and other paintable areas."}
                   </p>
                 </div>
-                {!drawing && (
-                  <div className="history-controls">
-                    <button
-                      aria-label="Undo surface change"
-                      title="Undo (Ctrl+Z)"
-                      disabled={!selectionHistory.current.past.length}
-                      onClick={undoSurfaces}
-                    >
-                      <Undo2 size={17} />
-                    </button>
-                    <button
-                      aria-label="Redo surface change"
-                      title="Redo (Ctrl+Y)"
-                      disabled={!selectionHistory.current.future.length}
-                      onClick={redoSurfaces}
-                    >
-                      <Redo2 size={17} />
-                    </button>
-                  </div>
-                )}
               </div>
               {!drawing && (
                 <>
@@ -1588,14 +1736,18 @@ function App() {
                         <button
                           aria-pressed={!curveMode}
                           className={!curveMode ? "active" : ""}
-                          onClick={() => setCurveMode(false)}
+                          onClick={() =>
+                            change("Point mode", () => setCurveMode(false))
+                          }
                         >
                           Points
                         </button>
                         <button
                           aria-pressed={curveMode}
                           className={curveMode ? "active" : ""}
-                          onClick={() => setCurveMode(true)}
+                          onClick={() =>
+                            change("Curve mode", () => setCurveMode(true))
+                          }
                         >
                           Curves
                         </button>
@@ -1609,17 +1761,20 @@ function App() {
                         className="full-width"
                         disabled={!points.length}
                         onClick={() => {
+                          beginHistory("Remove point");
                           setPoints((v) => v.slice(0, -1));
                           setCurveDrag(null);
                         }}
                       >
-                        <Undo2 size={16} /> Undo last point{" "}
+                        <Undo2 size={16} /> Remove last point{" "}
                         <span className="button-count">{points.length}</span>
                       </button>
                       <button
                         aria-pressed={edgeSnap}
                         className={`edge-snap full-width ${edgeSnap ? "active" : ""}`}
-                        onClick={() => setEdgeSnap((v) => !v)}
+                        onClick={() =>
+                          change("Edge snapping", () => setEdgeSnap((v) => !v))
+                        }
                       >
                         <Magnet size={16} />
                         {edgeSnap ? "Edge snapping on" : "Snap points to edges"}
@@ -1641,11 +1796,15 @@ function App() {
                         <input
                           aria-label="Colour tolerance"
                           type="range"
+                          onPointerUp={endAdjustment}
+                          onPointerCancel={endAdjustment}
+                          onKeyUp={endAdjustment}
+                          onBlur={endAdjustment}
                           min="8"
                           max="100"
                           value={colorTolerance}
                           onChange={(e) =>
-                            setColorTolerance(Number(e.target.value))
+                            changeTolerance(Number(e.target.value))
                           }
                         />
                       </label>
@@ -1654,7 +1813,7 @@ function App() {
                           type="checkbox"
                           checked={colorScope === "image"}
                           onChange={(e) =>
-                            setColorScope(
+                            changeScope(
                               e.target.checked ? "image" : "connected",
                             )
                           }
@@ -1683,13 +1842,18 @@ function App() {
                                 className={
                                   maskEditMode === mode ? "active" : ""
                                 }
-                                onClick={() => setMaskEditMode(mode)}
+                                onClick={() =>
+                                  change("Mask tool", () =>
+                                    setMaskEditMode(mode),
+                                  )
+                                }
                               >
                                 {label}
                               </button>
                             ))}
                             <button
                               onClick={() => {
+                                beginHistory("Trace mask addition");
                                 setMaskEditMode("trace-add");
                                 setTool("polygon");
                                 setPoints([]);
@@ -1701,6 +1865,7 @@ function App() {
                             </button>
                             <button
                               onClick={() => {
+                                beginHistory("Trace mask cutout");
                                 setMaskEditMode("trace-erase");
                                 setTool("polygon");
                                 setPoints([]);
@@ -1720,11 +1885,17 @@ function App() {
                               <input
                                 aria-label="Mask brush size"
                                 type="range"
+                                onPointerUp={endAdjustment}
+                                onPointerCancel={endAdjustment}
+                                onKeyUp={endAdjustment}
+                                onBlur={endAdjustment}
                                 min="6"
                                 max="120"
                                 value={brushSize}
                                 onChange={(e) =>
-                                  setBrushSize(Number(e.target.value))
+                                  adjust("Brush size", () =>
+                                    setBrushSize(Number(e.target.value)),
+                                  )
                                 }
                               />
                             </label>
@@ -1912,21 +2083,16 @@ function App() {
                       <input
                         aria-label="Paint coverage"
                         type="range"
+                        onPointerUp={endAdjustment}
+                        onPointerCancel={endAdjustment}
+                        onKeyUp={endAdjustment}
+                        onBlur={endAdjustment}
                         min="25"
                         max="100"
                         value={Math.round(selected.opacity * 100)}
                         onChange={(e) =>
                           setOpacity(Number(e.target.value) / 100)
                         }
-                        onPointerUp={() => {
-                          opacityHistory.current = false;
-                        }}
-                        onKeyUp={() => {
-                          opacityHistory.current = false;
-                        }}
-                        onBlur={() => {
-                          opacityHistory.current = false;
-                        }}
                       />
                     </label>
                     <button className="text-button" onClick={clearPaint}>
@@ -1972,7 +2138,8 @@ function App() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (selected) {
+            if (selected && name.trim() && name.trim() !== selected.name) {
+              beginHistory("Rename surface");
               updateSelections((v) =>
                 v.map((s) =>
                   s.id === selected.id
